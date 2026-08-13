@@ -51,6 +51,16 @@ class OpsEvent(StrEnum):
     DAY_COMPLETED = "day_completed"
     # Il rito è partito ma si è fermato prima di scrivere le decisioni.
     RUN_FAILED = "run_failed"
+    # Il passo delle decisioni ha fallito con un errore classificato
+    # ritentabile: il rito attende e sta per riprovare l'intero passo. Un
+    # evento per ogni attesa (la chiave include il numero del tentativo,
+    # perché più attese ricadono sullo stesso giorno e il registro è
+    # write-once per (giorno, evento)).
+    DECISIONS_RETRY_WAIT = "decisions_retry_wait"
+    # Il passo delle decisioni ha esaurito anche i retry a livello di rito:
+    # l'API non ha risposto entro la finestra, distinto da `skipped_day` — il
+    # rito è partito, non è che non sia partito.
+    FAILED_DECISIONS = "failed_decisions"
 
 
 @dataclass(frozen=True, slots=True)

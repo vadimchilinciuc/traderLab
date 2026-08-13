@@ -90,10 +90,19 @@ lo scheduler registra nella colonna "Last Run Result".
 | 4 | Esecuzione delle decisioni fallita | Il modello, il budget, o il ledger. Vedi §5. |
 | 5 | La giornata di oggi è già nel ledger | Nessun intervento: il write-once ha fatto il suo lavoro. |
 | 6 | Marcatura dei giorni mancati fallita | Il registro operativo è illeggibile o corrotto. Vedi §6. |
+| 7 | Decisioni fallite con errore ritentabile per tutta la finestra di retry | Il rito è partito e l'API non ha risposto entro ~45 min (3 tentativi, 15 min di attesa ciascuno). Non è un giorno saltato: si riprova in un'altra finestra oraria. Vedi §5. |
 
 Il codice **1 resta libero di proposito**: è quello che Python usa per
 un'eccezione non gestita, e non deve poter essere scambiato per un esito
 previsto del rito.
+
+Il codice 4 può anche arrivare **dopo** fino a tre ripetizioni dell'intero
+passo delle decisioni: se `scripts/run_day.py` esce con il codice dedicato di
+errore ritentabile (rete/capacità transitoria), il rito attende 15 minuti e
+riprova l'intero passo, fino a un totale di ~45 minuti, prima di arrendersi
+con il codice 7. Il passo dello snapshot non si ripete: solo le decisioni.
+Ogni attesa e il fallimento finale (se ci si arriva) sono eventi propri nel
+registro operativo (`decisions_retry_wait`, `failed_decisions`).
 
 ---
 

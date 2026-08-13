@@ -21,13 +21,17 @@ import pytest
 from arena.daily_ritual import (
     EXIT_ALREADY_DONE,
     EXIT_DECISIONS_FAILED,
+    EXIT_DECISIONS_RETRY_EXHAUSTED,
     EXIT_MEANING,
     EXIT_OK,
     EXIT_PRECONDITION,
     EXIT_SNAPSHOT_FAILED,
+    RITUAL_RETRY_MAX_ATTEMPTS,
+    RITUAL_RETRY_WAIT_SECONDS,
     log_path_for,
     run_daily,
 )
+from arena.llm_client import RETRYABLE_PROCESS_EXIT_CODE
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from contracts.decision import Action
 from ledger.ops_ledger import (
@@ -338,6 +342,118 @@ def test_decisioni_fallite_hanno_un_codice_proprio(percorsi):
     assert esito.exit_code == EXIT_DECISIONS_FAILED
     assert esito.snapshot_id == SNAPSHOT_ID
     assert "DuplicateEntry" in esito.log_path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# PASSO 2: retry a livello di rito su errore ritentabile (pazienza lunga)
+# --------------------------------------------------------------------------
+
+
+def _retry_wait_events(ops: OpsLedger) -> list[dict]:
+    """`ops.events()` confronta l'evento per uguaglianza esatta, ma ogni
+    attesa ha il proprio numero di tentativo in coda alla chiave (write-once
+    per (giorno, evento): più attese ricadono sullo stesso giorno). Qui si
+    filtra per prefisso."""
+    prefix = f"{OpsEvent.DECISIONS_RETRY_WAIT}:"
+    return [e for e in ops.read_all() if e["key"]["event"].startswith(prefix)]
+
+
+def test_un_errore_ritentabile_fa_ripetere_l_intero_passo_e_poi_riesce(percorsi):
+    """Codice dedicato dal client (RETRYABLE_PROCESS_EXIT_CODE): il rito
+    attende e riprova l'intero passo, senza toccare lo snapshot già congelato."""
+    runner = FakeRunner(
+        Completed(0, _build_output(), ""),
+        Completed(RETRYABLE_PROCESS_EXIT_CODE, "", "overloaded_error"),
+        Completed(0, "decisioni       : 6\n", ""),
+    )
+    dormite = []
+    esito = _rito(percorsi, runner, sleep=dormite.append)
+
+    assert esito.exit_code == EXIT_OK
+    assert dormite == [RITUAL_RETRY_WAIT_SECONDS]
+    # Lo snapshot NON viene ricostruito al retry: solo il passo 2 si ripete.
+    assert len(runner.commands) == 3
+    assert runner.commands[0][1].endswith("build_snapshot.py")
+    assert runner.commands[1][1].endswith("run_day.py")
+    assert runner.commands[2][1].endswith("run_day.py")
+    ops = OpsLedger(percorsi["ops_path"])
+    assert _retry_wait_events(ops)
+    assert not ops.events(OpsEvent.FAILED_DECISIONS)
+
+
+def test_un_errore_non_ritentabile_non_fa_attendere_il_rito(percorsi):
+    """Un codice di uscita diverso da RETRYABLE_PROCESS_EXIT_CODE resta il
+    fallimento definitivo di sempre: nessuna attesa, nessun retry."""
+    runner = FakeRunner(
+        Completed(0, _build_output(), ""),
+        Completed(1, "", "DuplicateEntry: write-once"),
+    )
+    dormite = []
+    esito = _rito(percorsi, runner, sleep=dormite.append)
+
+    assert esito.exit_code == EXIT_DECISIONS_FAILED
+    assert dormite == []
+    assert len(runner.commands) == 2
+
+
+def test_l_errore_ritentabile_esaurisce_la_finestra_e_ha_un_codice_dedicato(percorsi):
+    """Finestra ~45 min: 3 attese da 15 minuti, poi un esito distinto sia da
+    skipped_day sia dal fallimento generico — il rito e' partito, l'API no."""
+    runner = FakeRunner(
+        Completed(0, _build_output(), ""),
+        *(
+            Completed(RETRYABLE_PROCESS_EXIT_CODE, "", "overloaded_error")
+            for _ in range(1 + RITUAL_RETRY_MAX_ATTEMPTS)
+        ),
+    )
+    dormite = []
+    esito = _rito(percorsi, runner, sleep=dormite.append)
+
+    assert esito.exit_code == EXIT_DECISIONS_RETRY_EXHAUSTED
+    assert esito.snapshot_id == SNAPSHOT_ID
+    assert dormite == [RITUAL_RETRY_WAIT_SECONDS] * RITUAL_RETRY_MAX_ATTEMPTS
+    assert sum(dormite) == pytest.approx(45 * 60.0)
+    # snapshot + 1 tentativo iniziale + RITUAL_RETRY_MAX_ATTEMPTS retry.
+    assert len(runner.commands) == 1 + 1 + RITUAL_RETRY_MAX_ATTEMPTS
+
+    ops = OpsLedger(percorsi["ops_path"])
+    assert len(_retry_wait_events(ops)) == RITUAL_RETRY_MAX_ATTEMPTS
+    falliti = ops.events(OpsEvent.FAILED_DECISIONS)
+    assert len(falliti) == 1
+    assert "API non ha risposto" in falliti[0]["detail"]
+    # skipped_day resta un fatto diverso: nessuno scritto per questa giornata.
+    assert not ops.events(OpsEvent.SKIPPED_DAY)
+
+
+def test_gli_eventi_di_attesa_sono_scritti_nell_ops_ledger_per_ogni_tentativo(percorsi):
+    runner = FakeRunner(
+        Completed(0, _build_output(), ""),
+        *(
+            Completed(RETRYABLE_PROCESS_EXIT_CODE, "", "overloaded_error")
+            for _ in range(RITUAL_RETRY_MAX_ATTEMPTS)
+        ),
+        Completed(0, "decisioni       : 6\n", ""),
+    )
+    esito = _rito(percorsi, runner, sleep=lambda _: None)
+
+    assert esito.exit_code == EXIT_OK
+    ops = OpsLedger(percorsi["ops_path"])
+    eventi = sorted(e["key"]["event"] for e in _retry_wait_events(ops))
+    assert eventi == [
+        f"{OpsEvent.DECISIONS_RETRY_WAIT}:{n}" for n in range(1, RITUAL_RETRY_MAX_ATTEMPTS + 1)
+    ]
+    assert ops.verify().ok
+
+
+def test_gli_exit_code_restano_distinti_con_il_nuovo_codice():
+    assert len(set(EXIT_MEANING)) == len(EXIT_MEANING)
+    assert EXIT_DECISIONS_RETRY_EXHAUSTED not in (
+        EXIT_OK,
+        EXIT_PRECONDITION,
+        EXIT_SNAPSHOT_FAILED,
+        EXIT_DECISIONS_FAILED,
+        EXIT_ALREADY_DONE,
+    )
 
 
 def test_una_giornata_gia_nel_ledger_non_riparte(percorsi):

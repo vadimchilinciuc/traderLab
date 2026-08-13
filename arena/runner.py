@@ -22,7 +22,7 @@ from contracts.hashing import sha256_of
 from contracts.risk import RiskOutcome, RiskVerdict
 from contracts.snapshot import MarketSnapshot
 from arena.config import ArenaConfig, ContextFiles, all_tool_schemas, load_context
-from arena.llm_client import LLMClient, LLMResponse
+from arena.llm_client import LLMClient, LLMError, LLMResponse
 from arena.risk_officer import PortfolioState, RiskOfficer
 from arena.shadow_fill import compute_shadow_fill
 from arena.verbale import SUBMIT_TOOL_NAME, MalformedReason, ParsedVerbale, parse_verbale
@@ -31,6 +31,12 @@ from ledger.trader_ledger import LedgerKey, TraderLedger
 from toolserver.registry import ToolRegistry
 from toolserver.store import SnapshotStore
 from toolserver.toollog import ToolCallLog
+
+# Nome sintetico sotto cui la chiamata al modello (non un tool del Tool
+# Server) finisce nello stesso log JSONL delle tool call: è un dato sulla
+# richiesta al pari degli altri (CLAUDE.md §9), e la telemetria dei tentativi
+# vive lì, non in un file di testo a parte.
+LLM_COMPLETE_TOOL = "llm_complete"
 
 USER_TEMPLATE = (
     "Istante di riferimento dei dati: {asof}.\n"
@@ -298,8 +304,41 @@ class DailyRunner:
 
         response: LLMResponse | None = None
         for _ in range(self._config.max_tool_iterations):
-            response = client.complete(
-                system=system, messages=messages, tools=self._tools
+            try:
+                response = client.complete(
+                    system=system, messages=messages, tools=self._tools
+                )
+            except LLMError as exc:
+                # La telemetria del tentativo (CLAUDE.md §9) va loggata anche
+                # quando la chiamata fallisce del tutto: è qui, prima che
+                # l'errore risalga e faccia fallire il processo, l'unico
+                # punto che conosce ancora replica e asset.
+                self._tool_log.record(
+                    replica_id=replica_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    tool=LLM_COMPLETE_TOOL,
+                    args={"asset": asset},
+                    error=str(exc),
+                    meta={
+                        "attempts": exc.attempts,
+                        "attempt_errors": list(exc.attempt_errors),
+                        "duration_seconds": exc.duration_seconds,
+                        "error_type": exc.error_type,
+                        "retryable": exc.retryable,
+                    },
+                )
+                raise
+            self._tool_log.record(
+                replica_id=replica_id,
+                snapshot_id=snapshot.snapshot_id,
+                tool=LLM_COMPLETE_TOOL,
+                args={"asset": asset},
+                response={"stop_reason": response.stop_reason},
+                meta={
+                    "attempts": response.attempts,
+                    "attempt_errors": list(response.attempt_errors),
+                    "duration_seconds": response.duration_seconds,
+                },
             )
             # Rifiuto dei classificatori: HTTP 200 con content vuoto o parziale.
             # Va intercettato qui, altrimenti il parser lo classificherebbe

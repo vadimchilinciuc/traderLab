@@ -167,7 +167,26 @@ def test_i_tool_call_sono_loggati_per_replica(wired):
     entries = tool_log.read_all()
     assert entries
     assert {e["replica_id"] for e in entries} == set(DEFAULT_REPLICA_IDS)
-    assert all(e["tool"] == "get_asset_dossier" for e in entries)
+    assert {e["tool"] for e in entries} == {"get_asset_dossier", "llm_complete"}
+
+
+def test_la_chiamata_al_modello_e_loggata_con_la_sua_telemetria(wired):
+    """CLAUDE.md §9: la chiamata al modello è un dato, non solo la decisione.
+
+    Con il MockLLM ogni chiamata riesce al primo tentativo, quindi la
+    telemetria è quella "vuota" di default: un tentativo, nessun errore,
+    durata zero. La rete reale la popola davvero (vedi arena/llm_client.py).
+    """
+    _, snapshot, _, tool_log = wired
+    _runner(wired).run_day(snapshot.snapshot_id, run_id="run-1")
+    llm_entries = [e for e in tool_log.read_all() if e["tool"] == "llm_complete"]
+    # 2 turni per decisione (dossier + submit), 3 repliche x N asset.
+    assert len(llm_entries) == 2 * 3 * len(snapshot.universe)
+    for entry in llm_entries:
+        assert entry["ok"] is True
+        assert entry["meta"]["attempts"] == 1
+        assert entry["meta"]["attempt_errors"] == []
+        assert entry["meta"]["duration_seconds"] >= 0.0
 
 
 # --------------------------------------------------------------------------
@@ -570,6 +589,35 @@ def test_retry_con_backoff_su_errore_ritentabile():
     assert dormite == [1.0, 2.0]
 
 
+def test_la_risposta_riuscita_porta_la_telemetria_dei_tentativi_falliti():
+    """PASSO 1: la risposta finale sa quanti tentativi ha richiesto e con
+    quale errore sono falliti quelli precedenti — senza dover fare grep sui
+    log di testo (CLAUDE.md §9)."""
+    tentativi = {"n": 0}
+
+    class Boom(Exception):
+        status_code = 529
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            tentativi["n"] += 1
+            if tentativi["n"] < 3:
+                raise Boom("overloaded")
+            return _FakeStream(_FakeResponse())
+
+    class FakeAnthropic:
+        messages = FakeMessages()
+
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=FakeAnthropic(), sleep=lambda _: None
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.attempts == 3
+    assert response.attempt_errors == ("Boom", "Boom")
+    assert response.duration_seconds >= 0.0
+
+
 def test_un_400_non_viene_ritentato():
     tentativi = {"n": 0}
 
@@ -586,9 +634,39 @@ def test_un_400_non_viene_ritentato():
 
     manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
     client = AnthropicTraderClient(manifest, client=FakeAnthropic(), sleep=lambda _: None)
-    with pytest.raises(LLMError):
+    with pytest.raises(LLMError) as excinfo:
         client.complete(system="s", messages=[], tools=[])
     assert tentativi["n"] == 1
+    assert excinfo.value.retryable is False
+    assert excinfo.value.attempts == 1
+    assert excinfo.value.attempt_errors == ("Bad",)
+
+
+def test_errore_esaurito_dopo_i_retry_resta_marcato_ritentabile():
+    """Un overloaded che sopravvive a tutti i retry del client è comunque un
+    errore di classe transitoria: il rito (pazienza lunga) deve poterlo
+    distinguere da un 400 definitivo per decidere se vale la pena ritentare
+    l'intero passo."""
+
+    class Boom(Exception):
+        status_code = 529
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            raise Boom("overloaded")
+
+    class FakeAnthropic:
+        messages = FakeMessages()
+
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=FakeAnthropic(), max_retries=2, sleep=lambda _: None
+    )
+    with pytest.raises(LLMError) as excinfo:
+        client.complete(system="s", messages=[], tools=[])
+    assert excinfo.value.retryable is True
+    assert excinfo.value.attempts == 3
+    assert excinfo.value.attempt_errors == ("Boom", "Boom", "Boom")
 
 
 def test_classificazione_degli_errori_ritentabili():

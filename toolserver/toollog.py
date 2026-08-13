@@ -44,7 +44,12 @@ class ToolCallLog:
         args: dict[str, Any],
         response: Any = None,
         error: str | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """`meta` porta telemetria propria della chiamata (es. tentativi del
+        client LLM: numero, `type` di ciascun errore, durata totale) che non
+        è né un argomento né la risposta stessa, ma un dato su *come* è
+        avvenuta la chiamata."""
         entry = {
             "ts_utc": datetime.now(tz=timezone.utc).isoformat(),
             "run_id": self.run_id,
@@ -55,6 +60,7 @@ class ToolCallLog:
             "ok": error is None,
             "response_sha256": None if error is not None else sha256_of(response),
             "error": error,
+            "meta": meta or {},
         }
         line = json.dumps(entry, ensure_ascii=False, sort_keys=True)
         with self._lock:

@@ -26,7 +26,32 @@ from contracts.freeze import FreezeManifest, SamplingPolicy, ThinkingPolicy
 
 
 class LLMError(Exception):
-    pass
+    """Errore di una chiamata al modello.
+
+    Porta con sé la telemetria del tentativo (CLAUDE.md §9: cosa il Trader
+    chiede è un dato, alla pari di cosa decide — e qui "chiede" include
+    quante volte ha dovuto chiedere). `retryable` distingue un errore che il
+    client ha classificato come transitorio ma per cui ha comunque esaurito
+    la propria pazienza corta (`max_retries`) da un errore definitivo: solo
+    il primo caso vale la pena ritentarlo a un livello più alto (il rito).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str | None = None,
+        retryable: bool = False,
+        attempts: int = 1,
+        attempt_errors: tuple[str | None, ...] = (),
+        duration_seconds: float = 0.0,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+        self.attempts = attempts
+        self.attempt_errors = attempt_errors
+        self.duration_seconds = duration_seconds
 
 
 class BudgetExceeded(LLMError):
@@ -37,14 +62,34 @@ class MissingApiKey(LLMError):
     pass
 
 
+# Contratto fra `scripts/run_day.py` (produttore) e `arena/daily_ritual.py`
+# (consumatore): quando il processo delle decisioni esce con questo codice,
+# il rito sa che il fallimento è un `LLMError` classificato ritentabile — un
+# errore di rete/capacità per cui il client ha già esaurito la propria
+# pazienza corta — e vale la pena ritentare l'intero passo con pazienza
+# lunga, invece di trattarlo come un fallimento definitivo.
+RETRYABLE_PROCESS_EXIT_CODE = 10
+
+
 @dataclass(frozen=True, slots=True)
 class LLMResponse:
-    """Risposta normalizzata: blocchi di contenuto nell'ordine ricevuto."""
+    """Risposta normalizzata: blocchi di contenuto nell'ordine ricevuto.
+
+    `attempts`, `attempt_errors` e `duration_seconds` sono la telemetria del
+    tentativo (CLAUDE.md §9): quante chiamate HTTP ha richiesto questa
+    risposta, con quale `type` di errore ciascun tentativo fallito prima del
+    successo, e quanto tempo è passato in tutto — retry e attese di backoff
+    inclusi. Il MockLLM non fa rete: i default (un tentativo, nessun errore,
+    durata zero) sono corretti così come sono.
+    """
 
     content: list[Any]
     stop_reason: str | None
     model: str
     refusal_category: str | None = None
+    attempts: int = 1
+    attempt_errors: tuple[str | None, ...] = ()
+    duration_seconds: float = 0.0
 
     def tool_uses(self) -> list[Any]:
         return [b for b in self.content if _block_type(b) == "tool_use"]
@@ -191,18 +236,34 @@ class AnthropicTraderClient:
             "messages": messages,
             "tools": tools,
         }
-        last_error: Exception | None = None
+        started = time.monotonic()
+        attempt_errors: list[str | None] = []
         for attempt in range(self._max_retries + 1):
             try:
                 response = self._invoke(payload)
             except Exception as exc:  # noqa: BLE001 - classificato sotto
-                if not _is_retryable(exc) or attempt == self._max_retries:
-                    raise LLMError(f"chiamata al modello fallita: {exc}") from exc
-                last_error = exc
+                error_type = _error_type(exc)
+                retryable = _is_retryable(exc)
+                attempt_errors.append(error_type or exc.__class__.__name__)
+                if not retryable or attempt == self._max_retries:
+                    raise LLMError(
+                        f"chiamata al modello fallita: {exc}",
+                        error_type=error_type,
+                        retryable=retryable,
+                        attempts=attempt + 1,
+                        attempt_errors=tuple(attempt_errors),
+                        duration_seconds=time.monotonic() - started,
+                    ) from exc
                 self._sleep(self._base_backoff * (2**attempt))
                 continue
-            return _normalize_response(response, self._manifest.model_string)
-        raise LLMError(f"chiamata al modello fallita: {last_error}")
+            return _normalize_response(
+                response,
+                self._manifest.model_string,
+                attempts=attempt + 1,
+                attempt_errors=tuple(attempt_errors),
+                duration_seconds=time.monotonic() - started,
+            )
+        raise LLMError("chiamata al modello fallita: nessun tentativo eseguito")
 
     def _invoke(self, payload: dict[str, Any]) -> Any:
         """Streaming di default; `create` solo se esplicitamente disattivato."""
@@ -212,7 +273,14 @@ class AnthropicTraderClient:
             return stream.get_final_message()
 
 
-def _normalize_response(response: Any, fallback_model: str) -> LLMResponse:
+def _normalize_response(
+    response: Any,
+    fallback_model: str,
+    *,
+    attempts: int = 1,
+    attempt_errors: tuple[str | None, ...] = (),
+    duration_seconds: float = 0.0,
+) -> LLMResponse:
     stop_reason = getattr(response, "stop_reason", None)
     category = None
     if stop_reason == "refusal":
@@ -223,6 +291,9 @@ def _normalize_response(response: Any, fallback_model: str) -> LLMResponse:
         stop_reason=stop_reason,
         model=getattr(response, "model", fallback_model),
         refusal_category=category,
+        attempts=attempts,
+        attempt_errors=attempt_errors,
+        duration_seconds=duration_seconds,
     )
 
 

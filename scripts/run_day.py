@@ -17,7 +17,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arena.config import ArenaConfig, build_freeze_manifest, current_git_sha
-from arena.llm_client import AnthropicTraderClient, CallBudget, MockLLM
+from arena.llm_client import (
+    AnthropicTraderClient,
+    CallBudget,
+    LLMError,
+    MockLLM,
+    RETRYABLE_PROCESS_EXIT_CODE,
+)
 from arena.runner import DailyRunner
 from ledger.trader_ledger import TraderLedger
 from toolserver.config import ToolServerConfig, live_api_allowed
@@ -67,7 +73,28 @@ def main() -> int:
         client_factory=factory,
         context_git_sha=current_git_sha(),
     )
-    result = runner.run_day(args.snapshot_id, run_id=run_id)
+    try:
+        result = runner.run_day(args.snapshot_id, run_id=run_id)
+    except LLMError as exc:
+        # Un rifiuto resta un rifiuto e un 400 resta un 400: qui distinguiamo
+        # solo se vale la pena che il rito ritenti l'intero passo (pazienza
+        # lunga) da un fallimento definitivo. Nessun fallback di modello, mai
+        # (CLAUDE.md §10): questo blocco classifica, non nasconde, l'errore.
+        print(f"ERRORE: chiamata al modello fallita — {exc}", file=sys.stderr)
+        print(
+            f"tentativi       : {exc.attempts}  errori: {list(exc.attempt_errors)}  "
+            f"durata: {exc.duration_seconds:.1f}s",
+            file=sys.stderr,
+        )
+        if exc.retryable:
+            print(
+                "classificazione: errore transitorio (rete/capacita'), "
+                "ritentabile a livello di rito",
+                file=sys.stderr,
+            )
+            return RETRYABLE_PROCESS_EXIT_CODE
+        print("classificazione: errore non ritentabile", file=sys.stderr)
+        return 1
 
     print(f"\nrun_id          : {result.run_id}")
     print(f"asof_utc        : {result.asof_utc.isoformat()}")

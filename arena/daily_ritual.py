@@ -29,10 +29,12 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from arena.llm_client import RETRYABLE_PROCESS_EXIT_CODE
 from ledger.ops_ledger import (
     OpsEvent,
     OpsKey,
@@ -50,6 +52,7 @@ EXIT_SNAPSHOT_FAILED = 3
 EXIT_DECISIONS_FAILED = 4
 EXIT_ALREADY_DONE = 5
 EXIT_GAP_MARKING_FAILED = 6
+EXIT_DECISIONS_RETRY_EXHAUSTED = 7
 
 EXIT_MEANING: dict[int, str] = {
     EXIT_OK: "giornata completata",
@@ -58,7 +61,19 @@ EXIT_MEANING: dict[int, str] = {
     EXIT_DECISIONS_FAILED: "esecuzione delle decisioni fallita",
     EXIT_ALREADY_DONE: "la giornata di oggi e' gia' nel ledger",
     EXIT_GAP_MARKING_FAILED: "marcatura dei giorni mancati fallita",
+    EXIT_DECISIONS_RETRY_EXHAUSTED: (
+        "decisioni fallite con errore ritentabile per tutta la finestra di retry"
+    ),
 }
+
+# Pazienza lunga del rito, distinta dalla pazienza corta del client (che
+# resta max_retries=3, backoff 1/2/4 — vedi arena/llm_client.py). Se il passo
+# delle decisioni fallisce con un errore che il client ha già classificato
+# come transitorio ed esaurito, il rito riprova l'INTERO passo fino a
+# `RITUAL_RETRY_MAX_ATTEMPTS` volte, distanziate di `RITUAL_RETRY_WAIT_SECONDS`:
+# finestra totale = 3 * 15 min = 45 min.
+RITUAL_RETRY_MAX_ATTEMPTS = 3
+RITUAL_RETRY_WAIT_SECONDS = 15 * 60.0
 
 DEFAULT_LOG_DIR = Path("data/logs")
 DEFAULT_LEDGER_PATH = Path("data/ledger/season0.jsonl")
@@ -140,6 +155,7 @@ def run_daily(
     runner=subprocess_runner,
     env: dict[str, str] | None = None,
     echo: bool = True,
+    sleep=time.sleep,
 ) -> RitualResult:
     """Esegue il rito e ritorna l'esito. Non solleva."""
     log = RitualLog(path=log_path_for(today, log_dir), echo=echo)
@@ -254,6 +270,56 @@ def run_daily(
     decisions = runner(command, dict(base_env))
     log.block("run_day stdout", decisions.stdout or "")
     log.block("run_day stderr", decisions.stderr or "")
+
+    retry_attempt = 0
+    while (
+        decisions.returncode == RETRYABLE_PROCESS_EXIT_CODE
+        and retry_attempt < RITUAL_RETRY_MAX_ATTEMPTS
+    ):
+        retry_attempt += 1
+        log.write(
+            f"decisioni fallite con errore ritentabile (rete/capacita') — "
+            f"attesa {RITUAL_RETRY_WAIT_SECONDS:.0f}s prima del tentativo "
+            f"{retry_attempt}/{RITUAL_RETRY_MAX_ATTEMPTS} di ripetere l'intero "
+            f"passo"
+        )
+        _record(
+            ops_ledger,
+            OpsKey.of(today, f"{OpsEvent.DECISIONS_RETRY_WAIT}:{retry_attempt}"),
+            (
+                f"attesa di {RITUAL_RETRY_WAIT_SECONDS:.0f}s dopo un fallimento "
+                f"ritentabile del passo delle decisioni, prima del tentativo "
+                f"{retry_attempt}/{RITUAL_RETRY_MAX_ATTEMPTS}"
+            ),
+            now_utc,
+            log,
+        )
+        sleep(RITUAL_RETRY_WAIT_SECONDS)
+        log.write(
+            f"passo 2/2 — nuovo tentativo ({retry_attempt}/"
+            f"{RITUAL_RETRY_MAX_ATTEMPTS}) del passo delle decisioni (rete OFF)"
+        )
+        decisions = runner(command, dict(base_env))
+        log.block("run_day stdout", decisions.stdout or "")
+        log.block("run_day stderr", decisions.stderr or "")
+
+    if decisions.returncode == RETRYABLE_PROCESS_EXIT_CODE:
+        detail = (
+            f"il passo delle decisioni ha fallito con errore ritentabile per "
+            f"tutti i {RITUAL_RETRY_MAX_ATTEMPTS} tentativi (finestra "
+            f"~{RITUAL_RETRY_MAX_ATTEMPTS * RITUAL_RETRY_WAIT_SECONDS / 60:.0f} "
+            f"min): il rito e' partito e l'API non ha risposto, non e' un "
+            f"giorno saltato"
+        )
+        log.write(f"STOP: {detail}")
+        _record(ops_ledger, OpsKey.of(today, OpsEvent.FAILED_DECISIONS), detail, now_utc, log)
+        return RitualResult(
+            EXIT_DECISIONS_RETRY_EXHAUSTED,
+            log.path,
+            snapshot_id=snapshot_id,
+            skipped_marked=tuple(marcati),
+            detail=detail,
+        )
 
     if decisions.returncode != 0:
         return _stop(
