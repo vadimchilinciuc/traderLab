@@ -184,10 +184,12 @@ def test_build_rifiuta_snapshot_id_esplicito():
 
 def test_universe_status_e_parte_del_contenuto_hashato():
     a = make_snapshot()
+    assert a.universe_status == "pre_screen_ufficiale"
+    # Stesso contenuto, unico campo diverso: lo stato dell'universo.
     b = MarketSnapshot.build(
         asof_utc=a.asof_utc,
         universe=a.universe,
-        universe_status="pre_screen_ufficiale",
+        universe_status="placeholder_non_ufficiale",
         assets=a.assets,
         source=a.source,
         builder_version=a.builder_version,

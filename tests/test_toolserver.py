@@ -401,7 +401,7 @@ class FakeSource:
 def test_builder_produce_snapshot_sigillato():
     source = FakeSource({"BTC": 9e9, "ETH": 5e9, "SOL": 1e9}, ASOF)
     snap = SnapshotBuilder(source, SnapshotConfig(top_n_by_volume=1)).build(ASOF)
-    assert snap.universe_status == "placeholder_non_ufficiale"
+    assert snap.universe_status == "pre_screen_ufficiale"
     assert snap.universe[:2] == ("BTC", "ETH")
     assert "SOL" in snap.universe
     assert len(snap.snapshot_id) == 64
@@ -439,8 +439,19 @@ def test_builder_normalizza_asof_all_ora_fissa():
     )
 
 
-def test_builder_marca_universo_non_ufficiale_per_default():
-    assert SnapshotConfig().universe_status == "placeholder_non_ufficiale"
+def test_builder_marca_universo_ufficiale_per_default():
+    """Il Pre-Screen ha consegnato: l'universo di default è quello ufficiale."""
+    assert SnapshotConfig().universe_status == "pre_screen_ufficiale"
+
+
+def test_universo_di_default_e_esattamente_btc_eth():
+    """Nessuna coda per volume: solo il perimetro P3 promosso dal Pre-Screen."""
+    config = SnapshotConfig()
+    assert config.core_universe == ("BTC", "ETH")
+    assert config.top_n_by_volume == 0
+    source = FakeSource({"BTC": 9e9, "ETH": 5e9, "SOL": 1e9}, ASOF)
+    snap = SnapshotBuilder(source, config).build(ASOF)
+    assert snap.universe == ("BTC", "ETH")
 
 
 def test_builder_fallisce_pulito_senza_barre():
@@ -450,6 +461,79 @@ def test_builder_fallisce_pulito_senza_barre():
 
     with pytest.raises(SnapshotBuildError, match="nessuna barra chiusa"):
         SnapshotBuilder(Vuota({"BTC": 1e9}, ASOF)).build(ASOF)
+
+
+class FundingSource(FakeSource):
+    """Sorgente con funding a cadenza e ritardo controllati."""
+
+    def __init__(self, symbols, asof, interval_hours=1.0, lag_hours=1.0, n=200):
+        super().__init__(symbols, asof)
+        self.interval_hours = interval_hours
+        self.lag_hours = lag_hours
+        self.n = n
+
+    def funding_history(self, coin, start_ms, end_ms):
+        last = self.asof - timedelta(hours=self.lag_hours)
+        return [
+            {
+                "time": int(
+                    (last - timedelta(hours=self.interval_hours * i)).timestamp() * 1000
+                ),
+                "fundingRate": "0.0001",
+            }
+            for i in reversed(range(self.n))
+        ]
+
+
+def test_builder_deriva_la_cadenza_del_funding_dai_dati():
+    """8.0 fisso gonfierebbe di 8x l'annualizzato su funding orario."""
+    for interval in (1.0, 8.0):
+        source = FundingSource({"BTC": 1e9}, ASOF, interval_hours=interval)
+        snap = SnapshotBuilder(source).build(ASOF)
+        assert {p.interval_hours for p in snap.assets[0].funding} == {interval}
+
+
+def test_builder_rifiuta_il_funding_stantio():
+    """Una serie che si ferma settimane prima di asof non descrive il presente."""
+    source = FundingSource({"BTC": 1e9}, ASOF, lag_hours=24 * 30)
+    with pytest.raises(SnapshotBuildError, match="funding stantio"):
+        SnapshotBuilder(source).build(ASOF)
+
+
+def test_builder_deduplica_i_bordi_di_paginazione():
+    class Doppioni(FundingSource):
+        def funding_history(self, coin, start_ms, end_ms):
+            page = super().funding_history(coin, start_ms, end_ms)
+            return page + page[-1:]  # bordo ripetuto dalla pagina successiva
+
+    snap = SnapshotBuilder(Doppioni({"BTC": 1e9}, ASOF)).build(ASOF)
+    ts = [p.ts_utc for p in snap.assets[0].funding]
+    assert len(ts) == len(set(ts))
+
+
+def test_client_pagina_il_funding_oltre_il_limite_di_pagina():
+    """Una pagina piena significa 'ce n'è ancora': senza paginare si
+    otterrebbero i record più VECCHI e il funding corrente sparirebbe."""
+    from toolserver.hyperliquid import FUNDING_PAGE_LIMIT
+
+    start, total = 1_000_000, FUNDING_PAGE_LIMIT + 137
+    chiamate: list[int] = []
+
+    class ClientFinto(HyperliquidPublicClient):
+        def _post(self, payload):
+            cursor = payload["startTime"]
+            chiamate.append(cursor)
+            righe = [
+                {"time": start + i * 3_600_000, "fundingRate": "0.0001"}
+                for i in range(total)
+                if start + i * 3_600_000 >= cursor
+            ]
+            return righe[:FUNDING_PAGE_LIMIT]
+
+    out = ClientFinto().funding_history("BTC", start, start + total * 3_600_000)
+    assert len(chiamate) > 1
+    assert len(out) == total
+    assert out[-1]["time"] == start + (total - 1) * 3_600_000
 
 
 def test_builder_calcola_i_ranking_cross_sezionali():

@@ -88,7 +88,7 @@ def make_snapshot(asof: datetime = ASOF) -> MarketSnapshot:
     return MarketSnapshot.build(
         asof_utc=asof,
         universe=tuple(a.symbol for a in assets),
-        universe_status="placeholder_non_ufficiale",
+        universe_status="pre_screen_ufficiale",
         assets=assets,
         source="test_factory",
         builder_version="test-0",

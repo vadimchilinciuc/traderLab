@@ -110,14 +110,17 @@ def asset_features(asset: AssetSnapshot) -> dict[str, float | None]:
 
     funding_rates = [p.rate for p in asset.funding]
     funding_current = funding_rates[-1] if funding_rates else None
-    funding_7d = (
-        sum(funding_rates[-21:]) / len(funding_rates[-21:]) if funding_rates else None
-    )
+    funding_7d = None
     funding_annualized = None
     if asset.funding:
         last = asset.funding[-1]
-        periods_per_year = (365.0 * 24.0) / last.interval_hours
-        funding_annualized = last.rate * periods_per_year
+        # La finestra "7d" si deriva dalla cadenza dichiarata nel punto: un
+        # numero fisso di punti vorrebbe dire sette giorni solo a 8h di
+        # intervallo, e ventun ore a cadenza oraria.
+        window = max(1, round(7.0 * 24.0 / last.interval_hours))
+        recent = funding_rates[-window:]
+        funding_7d = sum(recent) / len(recent)
+        funding_annualized = last.rate * (365.0 * 24.0) / last.interval_hours
 
     features: dict[str, float | None] = {
         "return_1d": _simple_return(closes, 1),

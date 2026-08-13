@@ -116,9 +116,9 @@ class AssetSnapshot(FrozenModel):
 class MarketSnapshot(FrozenModel):
     """Stato del mondo congelato per una giornata di decisioni.
 
-    `universe_status` marca esplicitamente che l'universo è un PLACEHOLDER
-    finché il Pre-Screen non consegna quello ufficiale. Il campo è parte del
-    contenuto hashato: un cambio di stato produce uno snapshot_id diverso.
+    `universe_status` dichiara se l'universo è quello ufficiale del Pre-Screen
+    o un placeholder di lavoro. Il campo è parte del contenuto hashato: un
+    cambio di stato produce uno snapshot_id diverso.
     """
 
     asof_utc: datetime

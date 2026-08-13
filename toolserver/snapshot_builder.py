@@ -4,9 +4,9 @@ Disciplina point-in-time strutturale: entrano solo barre **chiuse** prima di
 `asof_utc`. Una barra ancora in formazione non è un fatto osservabile e non
 entra. Il filtro è qui, non nel prompt.
 
-L'universo è un PLACEHOLDER (`placeholder_non_ufficiale`) finché il Pre-Screen
-non consegna quello ufficiale, e lo stato viaggia dentro lo snapshot: chi
-legge un record non deve andare a cercare altrove se l'universo era definitivo.
+L'universo è quello UFFICIALE consegnato dal Pre-Screen
+(`pre_screen_ufficiale`), e lo stato viaggia dentro lo snapshot: chi legge un
+record non deve andare a cercare altrove se l'universo era definitivo.
 """
 
 from __future__ import annotations
@@ -30,6 +30,9 @@ from toolserver.errors import ToolServerError
 FALLBACK_SPREAD_BPS = 3.0
 FALLBACK_DEPTH_USD = 250_000.0
 DAY = timedelta(days=1)
+
+# Cadenza di funding usata solo quando la serie è troppo corta per osservarla.
+DEFAULT_FUNDING_INTERVAL_HOURS = 1.0
 
 
 class MarketDataSource(Protocol):
@@ -169,7 +172,7 @@ class SnapshotBuilder:
         self, symbol: str, start_ms: int, end_ms: int, asof_utc: datetime
     ) -> tuple[FundingPoint, ...]:
         raw = self._source.funding_history(symbol, start_ms, end_ms)
-        points: list[FundingPoint] = []
+        by_ts: dict[datetime, float] = {}
         for item in raw:
             ts = datetime.fromtimestamp(int(item["time"]) / 1000, tz=timezone.utc)
             if ts > asof_utc:
@@ -177,9 +180,57 @@ class SnapshotBuilder:
             rate = _to_float(item.get("fundingRate"))
             if rate is None:
                 continue
-            points.append(FundingPoint(ts_utc=ts, rate=rate, interval_hours=8.0))
-        points.sort(key=lambda p: p.ts_utc)
-        return tuple(points)
+            # La paginazione può ripresentare un bordo: l'ultimo vince, ma il
+            # valore è lo stesso — serve solo a non duplicare il punto.
+            by_ts[ts] = rate
+
+        timestamps = sorted(by_ts)
+        if not timestamps:
+            return ()
+        self._assert_funding_fresh(symbol, timestamps[-1], asof_utc)
+        interval = self._funding_interval_hours(timestamps)
+        return tuple(
+            FundingPoint(ts_utc=ts, rate=by_ts[ts], interval_hours=interval)
+            for ts in timestamps
+        )
+
+    def _assert_funding_fresh(
+        self, symbol: str, latest: datetime, asof_utc: datetime
+    ) -> None:
+        """Il funding stantio è il fallimento silenzioso più costoso qui.
+
+        Una serie che si ferma settimane prima di `asof` continua a validare e
+        a produrre uno snapshot sigillato, ma `funding_rate_current` descrive
+        un altro mondo. Meglio un errore pulito (§7).
+        """
+        lag_hours = (asof_utc - latest).total_seconds() / 3600.0
+        if lag_hours > self._config.max_funding_staleness_hours:
+            raise SnapshotBuildError(
+                f"funding stantio per {symbol}: ultimo punto "
+                f"{latest.isoformat()}, {lag_hours:.1f}h prima di "
+                f"{asof_utc.isoformat()} (limite "
+                f"{self._config.max_funding_staleness_hours}h)"
+            )
+
+    @staticmethod
+    def _funding_interval_hours(timestamps: list[datetime]) -> float:
+        """Cadenza OSSERVATA, non assunta.
+
+        Hyperliquid accredita il funding ogni ora; altre venue ogni otto.
+        Fissare il valore a 8.0 gonfierebbe di 8x `funding_rate_annualized`,
+        che su una campagna carry è la feature che decide. Il valore si aggancia
+        al quarto d'ora più vicino per non far dipendere lo `snapshot_id` dal
+        jitter di qualche millisecondo nei timestamp.
+        """
+        if len(timestamps) < 2:
+            return DEFAULT_FUNDING_INTERVAL_HOURS
+        deltas = sorted(
+            (b - a).total_seconds() / 3600.0
+            for a, b in zip(timestamps, timestamps[1:])
+        )
+        median = deltas[len(deltas) // 2]
+        snapped = round(median * 4.0) / 4.0
+        return snapped if snapped > 0.0 else DEFAULT_FUNDING_INTERVAL_HOURS
 
     # -- derivati ----------------------------------------------------------
 

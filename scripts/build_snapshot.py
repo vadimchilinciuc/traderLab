@@ -16,7 +16,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from toolserver.config import SnapshotConfig, ToolServerConfig, network_allowed
+from toolserver.config import (
+    DEFAULT_SNAPSHOT_HOUR_UTC,
+    DEFAULT_TOP_N_BY_VOLUME,
+    SnapshotConfig,
+    ToolServerConfig,
+    network_allowed,
+)
 from toolserver.hyperliquid import HyperliquidPublicClient
 from toolserver.snapshot_builder import SnapshotBuilder, normalized_asof
 from toolserver.store import SnapshotStore
@@ -29,8 +35,12 @@ def main() -> int:
         default=None,
         help="Istante di riferimento ISO-8601 UTC (default: adesso, normalizzato).",
     )
-    parser.add_argument("--top-n", type=int, default=10)
-    parser.add_argument("--hour-utc", type=int, default=0)
+    # I default vengono dalla config: un default duplicato qui sovrascriverebbe
+    # in silenzio l'universo ufficiale del Pre-Screen.
+    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N_BY_VOLUME)
+    parser.add_argument(
+        "--hour-utc", type=int, default=DEFAULT_SNAPSHOT_HOUR_UTC
+    )
     args = parser.parse_args()
 
     if not network_allowed():
