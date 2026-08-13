@@ -15,6 +15,7 @@ from arena.llm_client import (
     BudgetExceeded,
     CallBudget,
     LLMResponse,
+    LLMUsage,
     MockLLM,
 )
 from arena.regression import (
@@ -66,6 +67,7 @@ __all__ = [
     "DailyRunResult",
     "DailyRunner",
     "LLMResponse",
+    "LLMUsage",
     "MalformedReason",
     "MockLLM",
     "ParsedVerbale",

@@ -1,0 +1,39 @@
+{
+  "freeze_id": "f8cadb39414a64d0e7cd5f54e3412644aad92d7fa5dfbba0a243113cb98da26b",
+  "freeze_manifest": {
+    "context_git_sha": "9172b29",
+    "manifest_version": 1,
+    "max_tokens": 8000,
+    "model_string": "claude-fable-5",
+    "model_string_note": "TL-002: pin sul modello piu' capace disponibile via API. La string e' completa cosi' com'e': per claude-fable-5 non esiste una variante datata e un suffisso data produce 404, quindi questa E' la forma piu' specifica disponibile. Verificare con scripts/verify_pin.py contro l'endpoint il giorno del pin.",
+    "ots_pending": true,
+    "ots_proof_path": null,
+    "persona_sha": "d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3",
+    "pinned_at_utc": "2026-08-13T16:09:46.035632Z",
+    "sampling_policy": "api_default_omitted",
+    "system_prompt_sha": "7ccf9dc4fcecdd72dc122d522a73a97697b4d15ad9d9d8b33a9c2bdbfb6d4177",
+    "temperature": null,
+    "thinking_policy": "api_default",
+    "tool_schemas_sha": "d3accf7fe0cae5391f876f73fe99d6850f79e21c8aad7d77d56d6f18278c894f",
+    "top_k": null,
+    "top_p": null
+  },
+  "rito_config": {
+    "prereg_ref": {
+      "commit": "9ef5681",
+      "file": "docs/PREREG_LAB_S0.md",
+      "note": "PREREG_LAB_S0 congelata prima di ogni baseline (§8: rito del pin come precondizione al primo giorno di S0)."
+    },
+    "replica_ids": [
+      "r1",
+      "r2",
+      "r3"
+    ],
+    "size_policy": "fissa a rischio unitario (0.05), normalizzata dal Risk Officer (D3)",
+    "snapshot_schedule_utc": "00:00",
+    "universe": [
+      "BTC",
+      "ETH"
+    ]
+  }
+}

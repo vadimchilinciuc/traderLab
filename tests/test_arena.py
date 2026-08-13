@@ -23,6 +23,7 @@ from arena.llm_client import (
     CallBudget,
     LLMError,
     LLMResponse,
+    LLMUsage,
     MockLLM,
     _is_retryable,
 )
@@ -48,14 +49,25 @@ def wired(tmp_path):
     return store, snapshot, ledger, tool_log
 
 
+class _FakeUsage:
+    """Imita `anthropic.types.Usage`: solo i due campi che il client legge."""
+
+    def __init__(self, input_tokens, output_tokens):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
 class _FakeResponse:
     """Risposta minima compatibile con il normalizzatore del client."""
 
-    def __init__(self, stop_reason="end_turn", content=None, stop_details=None):
+    def __init__(
+        self, stop_reason="end_turn", content=None, stop_details=None, usage=None
+    ):
         self.content = content or []
         self.stop_reason = stop_reason
         self.model = DEFAULT_MODEL_STRING
         self.stop_details = stop_details
+        self.usage = usage
 
 
 class _FakeStream:
@@ -187,6 +199,115 @@ def test_la_chiamata_al_modello_e_loggata_con_la_sua_telemetria(wired):
         assert entry["meta"]["attempts"] == 1
         assert entry["meta"]["attempt_errors"] == []
         assert entry["meta"]["duration_seconds"] >= 0.0
+        # PASSO 0: il MockLLM non ha un usage reale. Null esplicito, mai zero
+        # — zero direbbe "zero token consumati", non "non registrato".
+        assert entry["meta"]["input_tokens"] is None
+        assert entry["meta"]["output_tokens"] is None
+
+
+def test_usage_reale_finisce_nel_tool_log_accanto_ai_tentativi(wired):
+    """PASSO 0: il client reale porta un usage — deve arrivare fino al log.
+
+    Un `LLMClient` finto (non il MockLLM, che non ha un usage reale) gioca il
+    ruolo del client Anthropic per verificare che `DailyRunner` propaghi
+    `response.usage` nello stesso punto in cui propaga `attempts`.
+    """
+    store, snapshot, ledger, tool_log = wired
+
+    class _UsageClient:
+        model_version = DEFAULT_MODEL_STRING
+
+        def complete(self, *, system, messages, tools):
+            asset = _asset_from(messages)
+            dossier = _dossier_from(messages)
+            if dossier is None:
+                return LLMResponse(
+                    content=[
+                        {
+                            "type": "tool_use",
+                            "name": "get_asset_dossier",
+                            "input": {"symbol": asset},
+                            "id": f"dossier_{asset}",
+                        }
+                    ],
+                    stop_reason="tool_use",
+                    model=DEFAULT_MODEL_STRING,
+                    usage=LLMUsage(input_tokens=120, output_tokens=15),
+                )
+            payload = {
+                "asset": asset,
+                "action": "flat",
+                "size_fraction": 0.0,
+                "horizon": "1-3d",
+                "expected_holding": "1-3d",
+                "confidence": 0.5,
+                "features_used": [{"name": "price_vs_sma_20", "value": 0.0}],
+                "invalidation_conditions": ["n/a"],
+                "risk_checks": [{"name": "costi_considerati", "passed": True, "note": ""}],
+            }
+            return LLMResponse(
+                content=[
+                    {"type": "text", "text": "Razionale minimo."},
+                    {
+                        "type": "tool_use",
+                        "name": "submit_decision",
+                        "input": payload,
+                        "id": f"submit_{asset}",
+                    },
+                ],
+                stop_reason="tool_use",
+                model=DEFAULT_MODEL_STRING,
+                usage=LLMUsage(input_tokens=340, output_tokens=58),
+            )
+
+    runner = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=lambda replica_id: _UsageClient(),
+        config=ArenaConfig(replica_ids=("r1",)),
+        context_git_sha="abcdef1",
+    )
+    runner.run_day(snapshot.snapshot_id, run_id="run-1")
+
+    llm_entries = [e for e in tool_log.read_all() if e["tool"] == "llm_complete"]
+    assert llm_entries
+    dossier_calls = [e for e in llm_entries if e["meta"]["input_tokens"] == 120]
+    submit_calls = [e for e in llm_entries if e["meta"]["input_tokens"] == 340]
+    assert dossier_calls and all(e["meta"]["output_tokens"] == 15 for e in dossier_calls)
+    assert submit_calls and all(e["meta"]["output_tokens"] == 58 for e in submit_calls)
+
+
+def _asset_from(messages):
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str) and "ASSET:" in content:
+            return content.split("ASSET:", 1)[1].split()[0].strip()
+    raise AssertionError("asset non trovato nei messaggi")
+
+
+def _dossier_from(messages):
+    import json
+
+    for message in reversed(messages):
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            payload = block.get("content")
+            if isinstance(payload, list):
+                payload = "".join(p.get("text", "") for p in payload if isinstance(p, dict))
+            if not isinstance(payload, str):
+                continue
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and "features" in parsed:
+                return parsed
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -240,9 +361,53 @@ def test_il_prompt_non_menziona_gara_repliche_o_valutazione():
 def test_le_note_editoriali_non_finiscono_nel_prompt():
     """I blockquote dei context file sono per chi mantiene il Lab, non per il Trader."""
     context = load_context()
-    assert "Bozza v0" in context.system_prompt
-    assert "Bozza v0" not in context.rendered_system
+    assert "PROMOSSA" in context.system_prompt
+    assert "PROMOSSA" not in context.rendered_system
     assert ">" not in context.rendered_system.split("\n")[0]
+
+
+# --------------------------------------------------------------------------
+# PASSO 1 (rito del pin): i file in uso ora sono la persona promossa. Gli
+# stessi controlli che finora giravano solo sulle bozze (tests/test_drafts.py)
+# devono valere anche qui: una bozza che li avesse violati non sarebbe mai
+# dovuta arrivare a essere il file in uso.
+# --------------------------------------------------------------------------
+
+
+def test_il_file_in_uso_non_ha_un_mandato_di_risultato():
+    testo = load_context().rendered_system.lower()
+    for parola in (
+        "profitt",
+        "guadagn",
+        "massimizz",
+        "obiettivo di rendimento",
+        "batti",
+        "supera il",
+        "il migliore",
+        "devi vincere",
+    ):
+        assert parola not in testo, f"il prompt contiene un mandato di risultato ('{parola}')"
+
+
+def test_il_file_in_uso_non_esercita_pressione_emotiva():
+    testo = load_context().rendered_system.lower()
+    for parola in (
+        "non deludere",
+        "mi raccomando",
+        "sei l'unico",
+        "dipende da te",
+        "fai del tuo meglio",
+        "urgente",
+        "opportunità da non perdere",
+    ):
+        assert parola not in testo, f"il prompt esercita pressione ('{parola}')"
+
+
+def test_il_file_in_uso_non_nomina_i_guardrail_a_valle():
+    """Un trader che sa di essere corretto a valle chiede più di quanto serve."""
+    testo = load_context().rendered_system.lower()
+    for parola in ("risk officer", "clamp", "guardrail", "tool server"):
+        assert parola not in testo, f"il prompt contiene '{parola}'"
 
 
 def test_le_repliche_sono_isolate_tra_loro(wired):
@@ -697,6 +862,34 @@ def test_la_risposta_riuscita_porta_la_telemetria_dei_tentativi_falliti():
     assert response.attempts == 3
     assert response.attempt_errors == ("Boom", "Boom")
     assert response.duration_seconds >= 0.0
+
+
+def test_usage_estratto_dalla_risposta_finale_in_streaming():
+    """PASSO 0: `get_final_message()` consolida l'usage — il client lo legge.
+
+    In streaming l'usage completo (input + output) viaggia nel
+    `message_delta` finale; l'SDK lo accumula da solo e lo espone su
+    `.usage` dell'oggetto restituito da `get_final_message()`.
+    """
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest,
+        client=_fake_streaming_client(
+            _FakeResponse(usage=_FakeUsage(input_tokens=512, output_tokens=64))
+        ),
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.usage == LLMUsage(input_tokens=512, output_tokens=64)
+
+
+def test_usage_assente_diventa_none_non_zero():
+    """Se il payload non porta un usage, il campo resta `None`: mai `0`."""
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=_fake_streaming_client(_FakeResponse(usage=None))
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.usage is None
 
 
 def test_un_400_non_viene_ritentato():

@@ -239,12 +239,23 @@ def test_il_cap_dichiarato_resta_un_mandato_e_non_un_numero_operativo():
 # --------------------------------------------------------------------------
 
 
-def test_le_bozze_non_sono_i_file_in_uso():
+def test_la_bozza_ancora_in_revisione_non_e_il_file_in_uso():
+    """AGGRESSIVA non è mai stata promossa: deve restare distinta dai file in uso."""
     from arena.config import AGENT_DIR
 
     in_uso = load_context(AGENT_DIR).rendered_sha
-    for bozza in BOZZE:
-        assert load_context(bozza).rendered_sha != in_uso
+    assert load_context(AGGRESSIVA).rendered_sha != in_uso
+
+
+def test_la_bozza_promossa_coincide_col_file_in_uso():
+    """NORMALE è stata promossa il 13/08/2026 (rito del pin): coincidere col
+    file in uso è l'esito atteso di una promozione, non una fuga di stato —
+    la differenza tra i due sta solo nel blockquote editoriale, che
+    `strip_editorial` toglie da entrambi prima del confronto."""
+    from arena.config import AGENT_DIR
+
+    in_uso = load_context(AGENT_DIR).rendered_sha
+    assert load_context(NORMALE).rendered_sha == in_uso
 
 
 def test_le_bozze_stanno_fuori_dalla_cartella_dei_context_in_uso():

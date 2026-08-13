@@ -340,6 +340,12 @@ class DailyRunner:
                     "attempts": response.attempts,
                     "attempt_errors": list(response.attempt_errors),
                     "duration_seconds": response.duration_seconds,
+                    "input_tokens": (
+                        response.usage.input_tokens if response.usage else None
+                    ),
+                    "output_tokens": (
+                        response.usage.output_tokens if response.usage else None
+                    ),
                 },
             )
             # Rifiuto dei classificatori: HTTP 200 con content vuoto o parziale.

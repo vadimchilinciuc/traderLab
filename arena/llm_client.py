@@ -72,6 +72,21 @@ RETRYABLE_PROCESS_EXIT_CODE = 10
 
 
 @dataclass(frozen=True, slots=True)
+class LLMUsage:
+    """Token consumati da una chiamata, secondo l'API (CLAUDE.md §9).
+
+    In streaming l'SDK accumula l'usage lungo gli eventi e lo consolida nel
+    `message_delta` finale: `get_final_message()` lo restituisce già completo,
+    non serve sommare gli eventi a mano. Se un campo manca davvero dal
+    payload resta `None` — mai `0`, che qui significherebbe "zero token" e
+    non "non registrato".
+    """
+
+    input_tokens: int | None
+    output_tokens: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class LLMResponse:
     """Risposta normalizzata: blocchi di contenuto nell'ordine ricevuto.
 
@@ -79,8 +94,10 @@ class LLMResponse:
     tentativo (CLAUDE.md §9): quante chiamate HTTP ha richiesto questa
     risposta, con quale `type` di errore ciascun tentativo fallito prima del
     successo, e quanto tempo è passato in tutto — retry e attese di backoff
-    inclusi. Il MockLLM non fa rete: i default (un tentativo, nessun errore,
-    durata zero) sono corretti così come sono.
+    inclusi. `usage` è la telemetria dei token, catturata dallo stesso posto
+    (CLAUDE.md §9: cosa il Trader chiede è un dato, alla pari di cosa
+    decide). Il MockLLM non fa rete: i default (un tentativo, nessun errore,
+    durata zero, usage assente) sono corretti così come sono.
     """
 
     content: list[Any]
@@ -90,6 +107,7 @@ class LLMResponse:
     attempts: int = 1
     attempt_errors: tuple[str | None, ...] = ()
     duration_seconds: float = 0.0
+    usage: LLMUsage | None = None
 
     def tool_uses(self) -> list[Any]:
         return [b for b in self.content if _block_type(b) == "tool_use"]
@@ -294,6 +312,24 @@ def _normalize_response(
         attempts=attempts,
         attempt_errors=attempt_errors,
         duration_seconds=duration_seconds,
+        usage=_extract_usage(response),
+    )
+
+
+def _extract_usage(response: Any) -> LLMUsage | None:
+    """Legge `usage` dalla risposta finale, se presente.
+
+    Vale sia per `create()` sia per `get_final_message()` in streaming: in
+    entrambi i casi l'SDK espone `.usage` già consolidato sull'oggetto
+    `Message`. Nessun campo -> `LLMUsage` assente, mai un usage a zero
+    inventato.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    return LLMUsage(
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
     )
 
 
