@@ -169,6 +169,25 @@ class RiskOfficer:
             detail=f"{asset}: {detail}"[:500],
         )
 
+    @staticmethod
+    def reject_refusal(asset: str, detail: str) -> RiskVerdict:
+        """Verdetto per un rifiuto del modello: NO TRADE, ma categoria distinta.
+
+        Tenerlo separato da `malformed_verbale` non è pedanteria contabile: il
+        tasso di verbali malformati misura se il **protocollo** regge, e un
+        rifiuto dei classificatori non dice nulla sul protocollo. Mescolarli
+        renderebbe illeggibili entrambe le metriche.
+        """
+        return RiskVerdict(
+            outcome=RiskOutcome.REJECTED,
+            rule=RiskRule.MODEL_REFUSAL,
+            action_in=Action.FLAT,
+            action_out=Action.FLAT,
+            size_fraction_in=0.0,
+            size_fraction_out=0.0,
+            detail=f"{asset}: {detail}"[:500],
+        )
+
 
 def _approve(action: Action, size: float) -> RiskVerdict:
     return RiskVerdict(

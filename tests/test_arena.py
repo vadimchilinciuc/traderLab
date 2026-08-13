@@ -6,7 +6,9 @@ import pytest
 
 from contracts.decision import Action
 from contracts.risk import RiskOutcome, RiskRule
+
 from arena.config import (
+    DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL_STRING,
     DEFAULT_REPLICA_IDS,
     ArenaConfig,
@@ -20,6 +22,7 @@ from arena.llm_client import (
     BudgetExceeded,
     CallBudget,
     LLMError,
+    LLMResponse,
     MockLLM,
     _is_retryable,
 )
@@ -27,7 +30,7 @@ from arena.risk_officer import RiskConfig
 from arena.runner import DailyRunner
 from arena.shadow_fill import compute_shadow_fill
 from arena.verbale import MalformedReason
-from contracts.freeze import SamplingPolicy
+from contracts.freeze import SamplingPolicy, ThinkingPolicy
 from ledger.trader_ledger import TraderLedger
 from toolserver.store import SnapshotStore
 from toolserver.toollog import ToolCallLog
@@ -43,6 +46,50 @@ def wired(tmp_path):
     ledger = TraderLedger(tmp_path / "ledger" / "s0.jsonl")
     tool_log = ToolCallLog(tmp_path / "toolcalls", run_id="run-1")
     return store, snapshot, ledger, tool_log
+
+
+class _FakeResponse:
+    """Risposta minima compatibile con il normalizzatore del client."""
+
+    def __init__(self, stop_reason="end_turn", content=None, stop_details=None):
+        self.content = content or []
+        self.stop_reason = stop_reason
+        self.model = DEFAULT_MODEL_STRING
+        self.stop_details = stop_details
+
+
+class _FakeStream:
+    """Context manager che imita `client.messages.stream(...)`."""
+
+    def __init__(self, response, recorder=None, kwargs=None):
+        self._response = response
+        self._recorder = recorder
+        self._kwargs = kwargs or {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get_final_message(self):
+        if self._recorder is not None:
+            self._recorder.update(self._kwargs)
+        return self._response
+
+
+def _fake_streaming_client(response=None, recorder=None):
+    """Fake che espone solo `messages.stream`: il client streamma di default."""
+    resp = response or _FakeResponse()
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            return _FakeStream(resp, recorder, kwargs)
+
+    class FakeAnthropic:
+        messages = FakeMessages()
+
+    return FakeAnthropic()
 
 
 def _runner(wired, *, behaviour="ok", config=None):
@@ -233,6 +280,57 @@ def test_retry_disattivabile(wired):
     assert all(o.attempts == 1 for o in result.outcomes)
 
 
+def test_un_rifiuto_non_e_un_verbale_malformato(wired):
+    """Il rifiuto del modello ha una categoria propria e non si ritenta."""
+    store, snapshot, ledger, tool_log = wired
+
+    class RifiutaSempre:
+        model_version = "fable-fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, *, system, messages, tools):
+            self.calls += 1
+            return LLMResponse(
+                content=[],
+                stop_reason="refusal",
+                model="claude-fable-5",
+                refusal_category="cyber",
+            )
+
+    clients = {}
+
+    def factory(replica_id):
+        clients[replica_id] = RifiutaSempre()
+        return clients[replica_id]
+
+    result = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=factory,
+        context_git_sha="abcdef1",
+    ).run_day(snapshot.snapshot_id, run_id="run-1")
+
+    for outcome in result.outcomes:
+        assert outcome.verdict.rule is RiskRule.MODEL_REFUSAL
+        assert outcome.malformed_reason is MalformedReason.MODEL_REFUSAL
+        assert outcome.decision is None
+        # Un rifiuto non si ritenta: input identico, risposta identica.
+        assert outcome.attempts == 1
+
+    for m in result.telemetry.all_metrics().values():
+        assert m.refusal_rate == pytest.approx(1.0)
+        assert m.malformed_rate == pytest.approx(0.0)
+        assert m.blocked_by_rule["model_refusal"] == len(snapshot.universe)
+
+    # Una chiamata per asset, non due: il retry non è scattato.
+    for client in clients.values():
+        assert client.calls == len(snapshot.universe)
+    assert ledger.verify().ok
+
+
 def test_telemetria_conta_i_malformati(wired):
     _, snapshot, _, _ = wired
     result = _runner(wired, behaviour="malformed").run_day(
@@ -352,32 +450,23 @@ def test_il_mock_consuma_budget(wired):
     assert client.budget.used == 2 * 3 * len(snapshot.universe)
 
 
-def test_d4_il_client_reale_non_invia_parametri_di_sampling():
-    """Il payload non contiene temperature, top_p, top_k."""
+def test_d4_su_fable_il_client_non_invia_sampling_ne_thinking():
+    """Il payload non contiene temperature, top_p, top_k, thinking, fallbacks.
+
+    Su claude-fable-5 ognuna di queste omissioni è obbligatoria, non stilistica:
+    i parametri di sampling e `thinking: disabled` producono 400, e `fallbacks`
+    servirebbe la risposta con un altro modello, violando D2.
+    """
     catturato = {}
-
-    class FakeMessages:
-        def create(self, **kwargs):
-            catturato.update(kwargs)
-
-            class R:
-                content = []
-                stop_reason = "end_turn"
-                model = DEFAULT_MODEL_STRING
-
-            return R()
-
-    class FakeAnthropic:
-        messages = FakeMessages()
-
     manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
-    client = AnthropicTraderClient(manifest, client=FakeAnthropic())
+    client = AnthropicTraderClient(
+        manifest, client=_fake_streaming_client(recorder=catturato)
+    )
     client.complete(system="s", messages=[{"role": "user", "content": "x"}], tools=[])
 
-    assert "temperature" not in catturato
-    assert "top_p" not in catturato
-    assert "top_k" not in catturato
-    assert catturato["model"] == DEFAULT_MODEL_STRING
+    for vietato in ("temperature", "top_p", "top_k", "thinking", "fallbacks"):
+        assert vietato not in catturato, f"il payload contiene {vietato}"
+    assert catturato["model"] == DEFAULT_MODEL_STRING == "claude-fable-5"
     assert catturato["max_tokens"] == manifest.max_tokens
 
 
@@ -390,26 +479,69 @@ def test_d4_il_client_rifiuta_un_manifest_con_sampling_esplicito():
         AnthropicTraderClient(esplicito, client=object())
 
 
-def test_il_client_reale_rispetta_il_budget():
-    class FakeMessages:
-        def create(self, **kwargs):
-            class R:
-                content = []
-                stop_reason = "end_turn"
-                model = DEFAULT_MODEL_STRING
+@pytest.mark.parametrize("policy", [ThinkingPolicy.DISABLED, ThinkingPolicy.ADAPTIVE])
+def test_il_client_rifiuta_una_thinking_policy_non_inviabile(policy):
+    """Su Fable il thinking non si configura: l'unica policy è l'omissione."""
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    with pytest.raises(LLMError, match="thinking"):
+        AnthropicTraderClient(
+            manifest.model_copy(update={"thinking_policy": policy}), client=object()
+        )
 
-            return R()
+
+def test_il_client_streamma_di_default():
+    """Turni lunghi + max_tokens alto: senza streaming si rischia il timeout."""
+    usato = {"stream": False}
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            usato["stream"] = True
+            return _FakeStream(_FakeResponse())
+
+        def create(self, **kwargs):
+            raise AssertionError("il client non deve usare create() di default")
 
     class FakeAnthropic:
         messages = FakeMessages()
 
+    AnthropicTraderClient(manifest, client=FakeAnthropic()).complete(
+        system="s", messages=[], tools=[]
+    )
+    assert usato["stream"] is True
+
+
+def test_max_tokens_lascia_spazio_al_thinking_sempre_attivo():
+    """Su Fable il thinking consuma lo stesso budget della risposta."""
+    assert DEFAULT_MAX_TOKENS >= 16_000
+
+
+def test_il_client_reale_rispetta_il_budget():
     manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
     client = AnthropicTraderClient(
-        manifest, client=FakeAnthropic(), budget=CallBudget(max_calls=1)
+        manifest, client=_fake_streaming_client(), budget=CallBudget(max_calls=1)
     )
     client.complete(system="s", messages=[], tools=[])
     with pytest.raises(BudgetExceeded):
         client.complete(system="s", messages=[], tools=[])
+
+
+def test_rifiuto_del_modello_riconosciuto_e_categorizzato():
+    """stop_reason='refusal' arriva con HTTP 200: non è un errore di rete."""
+
+    class Details:
+        category = "cyber"
+
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest,
+        client=_fake_streaming_client(
+            _FakeResponse(stop_reason="refusal", stop_details=Details())
+        ),
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.is_refusal
+    assert response.refusal_category == "cyber"
 
 
 def test_retry_con_backoff_su_errore_ritentabile():
@@ -420,17 +552,11 @@ def test_retry_con_backoff_su_errore_ritentabile():
         status_code = 529
 
     class FakeMessages:
-        def create(self, **kwargs):
+        def stream(self, **kwargs):
             tentativi["n"] += 1
             if tentativi["n"] < 3:
                 raise Boom("overloaded")
-
-            class R:
-                content = []
-                stop_reason = "end_turn"
-                model = DEFAULT_MODEL_STRING
-
-            return R()
+            return _FakeStream(_FakeResponse())
 
     class FakeAnthropic:
         messages = FakeMessages()
@@ -451,7 +577,7 @@ def test_un_400_non_viene_ritentato():
         status_code = 400
 
     class FakeMessages:
-        def create(self, **kwargs):
+        def stream(self, **kwargs):
             tentativi["n"] += 1
             raise Bad("invalid_request_error")
 

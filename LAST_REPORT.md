@@ -2,6 +2,17 @@
 
 **Repo**: `traderLab` · **Data**: 2026-08-13 · **Natura**: costruzione componenti + collaudo
 
+> **⚠️ Addendum del 2026-08-13 — TL-002 supera parti di questo report.**
+> Due punti qui sotto sono stati superati da `DECISION_LOG.md` → TL-002:
+> il **modello pinnato** non è più `claude-sonnet-5` ma **`claude-fable-5`**
+> (§4, D2), e le **soglie della suite di regressione** non sono più
+> `TODO-owner` (§7): l'owner ha fissato la regola
+> `alarm = baseline − 0.15 (pavimento 0.70)`,
+> `sunset = baseline − 0.30 (pavimento 0.50)`, confidence `+0.10` / `+0.20`.
+> La constatazione su **D4 è stata ri-verificata su Fable e confermata**:
+> policy identica, sampling per omissione. Tutto il resto del report resta
+> valido.
+
 > **Nessuna stagione è partita.** Il cronometro della Stagione 0 si avvia solo
 > dopo il GO del Pre-Screen (che gira in `zeroPipes`) e con autorizzazione
 > dell'owner. Questo repo non contiene chiavi di wallet e non esegue ordini

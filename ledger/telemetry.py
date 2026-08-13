@@ -112,6 +112,8 @@ class ReplicaMetrics:
     decisions_directional: int
     malformed_total: int
     malformed_rate: float
+    refusals_total: int
+    refusal_rate: float
     blocked_attempts: int
     blocked_by_rule: dict[str, int]
     clamped_total: int
@@ -128,6 +130,7 @@ class ReplicaCounters:
     decisions_total: int = 0
     decisions_directional: int = 0
     malformed_total: int = 0
+    refusals_total: int = 0
     clamped_total: int = 0
     blocked_by_rule: dict[str, int] = field(default_factory=dict)
     turnover: float = 0.0
@@ -187,6 +190,18 @@ class BehavioralTelemetry:
         counters.malformed_total += 1
         self._count_block(counters, verdict.rule)
 
+    def observe_refusal(self, replica_id: str, verdict: RiskVerdict) -> None:
+        """Rifiuto del modello: contato a parte dai verbali malformati.
+
+        Il tasso di malformati misura la tenuta del protocollo; un rifiuto dei
+        classificatori non ne dice nulla. Sommarli renderebbe illeggibili
+        entrambe le metriche.
+        """
+        counters = self._for(replica_id)
+        counters.decisions_total += 1
+        counters.refusals_total += 1
+        self._count_block(counters, verdict.rule)
+
     def observe_outcome(self, replica_id: str, confidence: float, correct: bool) -> None:
         """Alimenta il Brier score. Usato solo quando esistono esiti."""
         self._for(replica_id).brier.add(confidence, 1 if correct else 0)
@@ -213,6 +228,10 @@ class BehavioralTelemetry:
             malformed_total=c.malformed_total,
             malformed_rate=(
                 c.malformed_total / c.decisions_total if c.decisions_total else 0.0
+            ),
+            refusals_total=c.refusals_total,
+            refusal_rate=(
+                c.refusals_total / c.decisions_total if c.decisions_total else 0.0
             ),
             blocked_attempts=blocked,
             blocked_by_rule=dict(sorted(c.blocked_by_rule.items())),

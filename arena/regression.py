@@ -16,12 +16,37 @@ visto i dati è una metrica scelta per il risultato che dà:
    `|confidence - confidence_media_baseline|` sui campioni, mediata sugli
    snapshot.
 
-## Cosa NON è dichiarato qui
+## Le soglie (TL-002)
 
-Le **soglie** di allarme e di sunset. Sono `TODO-owner` nel
-`MILESTONE_TRACKER.md` e vanno fissate **prima** della raccolta della baseline.
-`evaluate()` **solleva** se le soglie non sono state fissate: un default
-silenzioso qui significherebbe scoprire la deriva quando conviene.
+Non più `TODO-owner`: l'owner ha fissato una **regola**, che questo modulo
+applica meccanicamente (`thresholds_from_baseline`).
+
+| Soglia | Regola TL-002 |
+| --- | --- |
+| `agreement_alarm` | `baseline − 0.15`, con pavimento `0.70` |
+| `agreement_sunset` | `baseline − 0.30`, con pavimento `0.50` |
+| `confidence_alarm` | `+0.10` (distanza assoluta) |
+| `confidence_sunset` | `+0.20` (distanza assoluta) |
+
+Restano due punti da leggere con attenzione.
+
+**Cos'è "baseline".** È l'**auto-accordo** della baseline: la quota di campioni
+che concordano con l'azione modale del proprio snapshot, mediata
+(`Baseline.self_agreement_rate`). È l'unica quantità misurata disponibile, ed è
+quella giusta: non si può pretendere dal modello più accordo di quanto ne abbia
+con se stesso. Se la regola andasse invece applicata a 1.0 (accordo perfetto
+per definizione), le soglie sarebbero 0.85 e 0.70 fisse — è una riga di codice,
+ma è una scelta dell'owner, non un dettaglio implementativo.
+
+**Il pavimento può mordere.** Con un auto-accordo di baseline ≤ 0.85 il
+pavimento 0.70 è più severo di `baseline − 0.15`, e con auto-accordo ≤ 0.70 la
+suite andrebbe in allarme sul comportamento **di baseline**. Non è un caso
+teorico con k=5. `thresholds_from_baseline` lo rileva e lo espone in
+`ThresholdDerivation.floor_binds` / `.is_degenerate` invece di produrre in
+silenzio una configurazione che suona l'allarme il primo giorno.
+
+`evaluate()` **solleva** comunque se le soglie non sono state fissate: un
+default silenzioso significherebbe scoprire la deriva quando conviene.
 
 ## Aggancio al model sunset
 
@@ -56,13 +81,47 @@ MAX_FROZEN_SNAPSHOTS = 15
 SAMPLES_PER_SNAPSHOT = 5
 CADENCE = "settimanale"
 
+# --- Regola delle soglie, TL-002 -----------------------------------------
+# Scarti e pavimenti fissati dall'owner. Sono costanti, non parametri: cambiarli
+# e' una voce nel DECISION_LOG, non una variabile di configurazione.
+AGREEMENT_ALARM_DROP = 0.15
+AGREEMENT_ALARM_FLOOR = 0.70
+AGREEMENT_SUNSET_DROP = 0.30
+AGREEMENT_SUNSET_FLOOR = 0.50
+CONFIDENCE_ALARM_DISTANCE = 0.10
+CONFIDENCE_SUNSET_DISTANCE = 0.20
+
+
+def threshold_rule_fingerprint() -> str:
+    """Sha della regola delle soglie in vigore.
+
+    È **questo** l'artefatto di pre-registrazione, ora che le soglie assolute
+    si derivano dalla baseline: la regola è fissata prima, la baseline dopo. La
+    `Baseline` incide questa impronta al momento della raccolta, così che una
+    regola cambiata *dopo* aver visto i dati non passi inosservata.
+    """
+    return sha256_of(
+        {
+            "agreement_alarm_drop": AGREEMENT_ALARM_DROP,
+            "agreement_alarm_floor": AGREEMENT_ALARM_FLOOR,
+            "agreement_sunset_drop": AGREEMENT_SUNSET_DROP,
+            "agreement_sunset_floor": AGREEMENT_SUNSET_FLOOR,
+            "confidence_alarm_distance": CONFIDENCE_ALARM_DISTANCE,
+            "confidence_sunset_distance": CONFIDENCE_SUNSET_DISTANCE,
+        }
+    )
+
 
 class RegressionError(Exception):
     pass
 
 
 class ThresholdsNotSet(RegressionError):
-    """Le soglie sono TODO-owner: vanno fissate prima della baseline."""
+    """Soglie assolute non ancora derivate dalla baseline (regola TL-002)."""
+
+
+class ThresholdRuleChanged(RegressionError):
+    """La regola delle soglie è cambiata dopo la raccolta della baseline."""
 
 
 class SuiteAlreadyFrozen(RegressionError):
@@ -118,6 +177,27 @@ class Baseline:
     model_string: str
     samples_per_snapshot: int
     entries: tuple[BaselineEntry, ...]
+    # Regola delle soglie in vigore al momento della raccolta (TL-002).
+    threshold_rule_sha: str = ""
+
+    @property
+    def self_agreement_rate(self) -> float:
+        """Auto-accordo della baseline: quanto il modello concorda con se stesso.
+
+        Per ogni snapshot, la quota di campioni che coincidono con l'azione
+        modale; poi si media sugli snapshot. È il "baseline" della regola
+        TL-002 sulle soglie: non si può pretendere dal modello più accordo di
+        quanto ne abbia con se stesso a parità di input.
+        """
+        if not self.entries:
+            return 0.0
+        rates = []
+        for entry in self.entries:
+            modal = entry.modal_action
+            rates.append(
+                sum(1 for a in entry.actions if a == modal) / len(entry.actions)
+            )
+        return sum(rates) / len(rates)
 
     @property
     def baseline_id(self) -> str:
@@ -196,6 +276,82 @@ class DriftThresholds:
             )
             if value is None
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ThresholdDerivation:
+    """Soglie derivate dalla regola TL-002, con la diagnostica del pavimento."""
+
+    baseline_agreement: float
+    thresholds: DriftThresholds
+    floor_binds: bool
+    is_degenerate: bool
+    detail: str
+
+    def as_config_literal(self) -> str:
+        """Righe da incollare in `arena/config.py` il giorno della baseline."""
+        t = self.thresholds
+        return (
+            "REGRESSION_THRESHOLDS = DriftThresholds(\n"
+            f"    agreement_alarm={t.agreement_alarm:.4f},\n"
+            f"    agreement_sunset={t.agreement_sunset:.4f},\n"
+            f"    confidence_alarm={t.confidence_alarm:.4f},\n"
+            f"    confidence_sunset={t.confidence_sunset:.4f},\n"
+            ")"
+        )
+
+
+def thresholds_from_baseline(baseline_agreement: float) -> ThresholdDerivation:
+    """Applica meccanicamente la regola TL-002.
+
+    alarm  = max(baseline - 0.15, 0.70)
+    sunset = max(baseline - 0.30, 0.50)
+    confidence: distanze assolute +0.10 e +0.20.
+
+    Il pavimento è un vincolo di severità minima: anche con una baseline
+    rumorosa, sotto 0.70 di accordo si suona comunque l'allarme. Quando però il
+    pavimento supera la baseline stessa, la suite allarmerebbe sul
+    comportamento di baseline: il caso viene segnalato, non nascosto.
+    """
+    if not 0.0 <= baseline_agreement <= 1.0:
+        raise ValueError("baseline_agreement fuori da [0, 1]")
+
+    raw_alarm = baseline_agreement - AGREEMENT_ALARM_DROP
+    raw_sunset = baseline_agreement - AGREEMENT_SUNSET_DROP
+    alarm = max(raw_alarm, AGREEMENT_ALARM_FLOOR)
+    sunset = max(raw_sunset, AGREEMENT_SUNSET_FLOOR)
+
+    floor_binds = alarm > raw_alarm or sunset > raw_sunset
+    degenerate = alarm >= baseline_agreement
+
+    if degenerate:
+        detail = (
+            f"auto-accordo di baseline {baseline_agreement:.4f} <= soglia di "
+            f"allarme {alarm:.4f}: con queste soglie la suite andrebbe in "
+            f"allarme sul comportamento di baseline. Il modello e' troppo poco "
+            f"consistente con se stesso perche' la deriva sia misurabile."
+        )
+    elif floor_binds:
+        detail = (
+            f"pavimento attivo: alarm {alarm:.4f} (regola grezza "
+            f"{raw_alarm:.4f}), sunset {sunset:.4f} (regola grezza "
+            f"{raw_sunset:.4f})."
+        )
+    else:
+        detail = "regola applicata senza intervento del pavimento."
+
+    return ThresholdDerivation(
+        baseline_agreement=baseline_agreement,
+        thresholds=DriftThresholds(
+            agreement_alarm=alarm,
+            agreement_sunset=sunset,
+            confidence_alarm=CONFIDENCE_ALARM_DISTANCE,
+            confidence_sunset=CONFIDENCE_SUNSET_DISTANCE,
+        ),
+        floor_binds=floor_binds,
+        is_degenerate=degenerate,
+        detail=detail,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -305,12 +461,13 @@ class BehavioralRegressionSuite:
     def collect_baseline(
         self, source: SampleSource, *, freeze_id: str, model_string: str
     ) -> Baseline:
-        """Raccoglie k campioni per snapshot sul Trader pinnato."""
-        if not self.thresholds.is_set:
-            raise ThresholdsNotSet(
-                "le soglie vanno fissate PRIMA della baseline. Mancano: "
-                + ", ".join(self.thresholds.missing())
-            )
+        """Raccoglie k campioni per snapshot sul Trader pinnato.
+
+        Non richiede soglie assolute: sotto TL-002 quelle si **derivano** dalla
+        baseline. Ciò che deve essere fissato prima è la **regola**, e la sua
+        impronta viene incisa nella baseline (`threshold_rule_sha`) proprio per
+        rendere verificabile che non sia stata cambiata dopo aver visto i dati.
+        """
         entries: list[BaselineEntry] = []
         for ref in self.refs():
             actions: list[str] = []
@@ -338,7 +495,12 @@ class BehavioralRegressionSuite:
             model_string=model_string,
             samples_per_snapshot=self.samples_per_snapshot,
             entries=tuple(entries),
+            threshold_rule_sha=threshold_rule_fingerprint(),
         )
+
+    def derive_thresholds(self, baseline: Baseline) -> ThresholdDerivation:
+        """Applica la regola TL-002 all'auto-accordo della baseline."""
+        return thresholds_from_baseline(baseline.self_agreement_rate)
 
     # -- misura ------------------------------------------------------------
 
@@ -393,18 +555,36 @@ class BehavioralRegressionSuite:
 
     # -- verdetto ----------------------------------------------------------
 
-    def evaluate(self, report: DriftReport) -> DriftReport:
+    def evaluate(
+        self, report: DriftReport, *, baseline: Baseline | None = None
+    ) -> DriftReport:
         """Applica le soglie. **Solleva** se non sono state fissate.
 
         Un default silenzioso qui significherebbe scoprire la deriva quando
         conviene, cioè mai.
+
+        Se viene passata la `baseline`, verifica anche che la **regola** delle
+        soglie non sia cambiata da quando la baseline è stata raccolta: soglie
+        riscritte dopo aver visto i dati sono soglie scelte per il risultato
+        che danno.
         """
         t = self.thresholds
         if not t.is_set:
             raise ThresholdsNotSet(
-                "impossibile emettere un verdetto: soglie TODO-owner non "
-                "fissate. Mancano: " + ", ".join(t.missing())
+                "impossibile emettere un verdetto: soglie assolute non "
+                "derivate. Applica thresholds_from_baseline() alla baseline e "
+                "scrivi i valori in arena/config.py. Mancano: "
+                + ", ".join(t.missing())
             )
+        if baseline is not None and baseline.threshold_rule_sha:
+            current = threshold_rule_fingerprint()
+            if current != baseline.threshold_rule_sha:
+                raise ThresholdRuleChanged(
+                    "la regola delle soglie e' cambiata dopo la raccolta della "
+                    f"baseline (baseline {baseline.threshold_rule_sha[:12]}, "
+                    f"attuale {current[:12]}): il verdetto non sarebbe "
+                    "pre-registrato"
+                )
 
         if (
             report.action_agreement_rate <= t.agreement_sunset

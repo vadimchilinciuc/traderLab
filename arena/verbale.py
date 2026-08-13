@@ -150,6 +150,9 @@ class MalformedReason(StrEnum):
     RATIONALE_TOO_SHORT = "rationale_too_short"
     INVALID_ARGUMENTS = "invalid_arguments"
     ASSET_MISMATCH = "asset_mismatch"
+    # Il modello ha declinato (stop_reason='refusal'). Categoria a se': non e'
+    # il protocollo ad aver fallito.
+    MODEL_REFUSAL = "model_refusal"
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,20 +22,31 @@ AGENT_DIR = Path(__file__).resolve().parents[1] / "agents" / "trader_v0"
 # D1: tre repliche identiche.
 DEFAULT_REPLICA_IDS: tuple[str, ...] = ("r1", "r2", "r3")
 
-# D2. Gli ID dei modelli Claude correnti sono completi cosi' come sono: per la
-# Sonnet corrente NON esiste una variante datata e aggiungere un suffisso data
-# produce 404. Questa e' quindi la model string piu' specifica disponibile.
-DEFAULT_MODEL_STRING = "claude-sonnet-5"
+# TL-002 supera D2 di TL-001: il Trader e' pinnato sul modello piu' capace
+# disponibile via API. Gli ID dei modelli Claude correnti sono completi cosi'
+# come sono: per Fable NON esiste una variante datata e aggiungere un suffisso
+# data produce 404. Questa e' quindi la model string piu' specifica possibile.
+DEFAULT_MODEL_STRING = "claude-fable-5"
 DEFAULT_MODEL_NOTE = (
-    "Model string piu' specifica disponibile al momento del pin: per la Sonnet "
-    "corrente non esiste una variante datata (un suffisso data produce 404). "
-    "L'unica alternativa 'datata' sarebbe scendere di generazione a "
-    "claude-sonnet-4-5-20250929, cioe' pinnare un modello legacy."
+    "TL-002: pin sul modello piu' capace disponibile via API. La string e' "
+    "completa cosi' com'e': per claude-fable-5 non esiste una variante datata "
+    "e un suffisso data produce 404, quindi questa E' la forma piu' specifica "
+    "disponibile. Verificare con scripts/verify_pin.py contro l'endpoint il "
+    "giorno del pin."
 )
 
-DEFAULT_MAX_TOKENS = 8_000
+# Fable ha il thinking SEMPRE ATTIVO e non disattivabile, e i token di
+# ragionamento consumano max_tokens insieme alla risposta. Un tetto tarato su
+# un modello senza thinking tronca la risposta a meta'. Sopra i ~16k
+# l'SDK richiede streaming per non incorrere nei timeout HTTP: il client
+# streamma di default (vedi arena/llm_client.py).
+DEFAULT_MAX_TOKENS = 32_000
 DEFAULT_MAX_TOOL_ITERATIONS = 10
+# Fable e' il modello piu' caro del listino: il tetto di chiamate non e' una
+# formalita'.
 DEFAULT_MAX_LLM_CALLS_PER_DAY = 200
+# I turni di Fable possono durare minuti. Timeout esplicito, non implicito.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 900.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,11 +162,17 @@ def build_freeze_manifest(
 ) -> FreezeManifest:
     """Compone il manifest dal contenuto realmente congelato.
 
-    D4: `sampling_policy=api_default_omitted`. Il client **non invia**
-    `temperature`, `top_p`, `top_k` — sui Sonnet correnti i valori non-default
-    sono rifiutati dall'API con 400, quindi il default operativo si ottiene per
-    omissione. I tre campi restano `None`: "default dell'API" non deve mai
-    essere confuso con "0" o con "non registrato".
+    D4 su Fable (ri-verifica richiesta da TL-002): la policy resta **identica**
+    e diventa l'unica forma di chiamata valida. Su `claude-fable-5` i parametri
+    di sampling `temperature`, `top_p` e `top_k` sono **rimossi**: inviarli
+    produce 400. Il default operativo si ottiene quindi per **omissione**,
+    esattamente come dichiarato. I tre campi restano `None`: "default dell'API"
+    non deve mai essere confuso con "0" o con "non registrato".
+
+    `thinking_policy=api_default` è l'unico valore valido su Fable: il thinking
+    è **sempre attivo e non disattivabile**, e sia `{"type": "disabled"}` sia
+    `budget_tokens` producono 400. Anche qui la policy si realizza omettendo il
+    parametro.
     """
     context = load_context(agent_dir)
     return FreezeManifest(

@@ -19,12 +19,17 @@ from arena.llm_client import (
 )
 from arena.regression import (
     SAMPLES_PER_SNAPSHOT,
+    Baseline,
     BehavioralRegressionSuite,
     DecisionSnapshotRef,
     DriftReport,
     DriftThresholds,
     DriftVerdict,
+    ThresholdDerivation,
+    ThresholdRuleChanged,
     ThresholdsNotSet,
+    threshold_rule_fingerprint,
+    thresholds_from_baseline,
 )
 from arena.risk_officer import PortfolioState, RiskConfig, RiskOfficer
 from arena.runner import AssetOutcome, DailyRunner, DailyRunResult
@@ -44,12 +49,17 @@ __all__ = [
     "AnthropicTraderClient",
     "ArenaConfig",
     "AssetOutcome",
+    "Baseline",
     "BehavioralRegressionSuite",
     "DecisionSnapshotRef",
     "DriftReport",
     "DriftThresholds",
     "DriftVerdict",
+    "ThresholdDerivation",
+    "ThresholdRuleChanged",
     "ThresholdsNotSet",
+    "threshold_rule_fingerprint",
+    "thresholds_from_baseline",
     "BudgetExceeded",
     "CallBudget",
     "ContextFiles",

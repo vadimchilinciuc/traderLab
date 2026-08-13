@@ -140,7 +140,7 @@ def make_decision(
 def make_manifest(pinned_at: datetime = ASOF) -> FreezeManifest:
     return FreezeManifest(
         pinned_at_utc=pinned_at,
-        model_string="claude-sonnet-5",
+        model_string="claude-fable-5",
         model_string_note="test",
         sampling_policy=SamplingPolicy.API_DEFAULT_OMITTED,
         max_tokens=8000,

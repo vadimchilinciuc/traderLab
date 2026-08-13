@@ -102,9 +102,15 @@ violarle invalida il track record.
 - **Cambio modello = nuovo track record.** Non si confrontano segmenti con
   model string diverse.
 - Temperatura: **default operativo dell'API, nessun override, MAI 0** (D4).
-  Sui modelli Sonnet correnti i parametri di sampling non-default vengono
-  rifiutati con 400: il codice quindi **non invia** `temperature`, `top_p`,
-  `top_k`. Questo è registrato nel manifest come scelta esplicita.
+  Sul modello pinnato i parametri di sampling non-default vengono rifiutati con
+  400: il codice quindi **non invia** `temperature`, `top_p`, `top_k`. Questo è
+  registrato nel manifest come scelta esplicita.
+- Stesso principio per `thinking`: sul modello pinnato è sempre attivo e non
+  disattivabile, quindi il parametro **non si invia**.
+- **Nessun fallback server-side.** Un rifiuto servito da un altro modello
+  produrrebbe track record con un modello diverso da quello pinnato, in
+  silenzio. Un rifiuto resta un rifiuto: visibile, loggato, contato a parte dai
+  verbali malformati.
 
 ## 11. Cosa NON fare, in breve
 

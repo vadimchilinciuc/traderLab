@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from contracts.freeze import FreezeManifest, SamplingPolicy
+from contracts.freeze import FreezeManifest, SamplingPolicy, ThinkingPolicy
 
 
 class LLMError(Exception):
@@ -44,9 +44,20 @@ class LLMResponse:
     content: list[Any]
     stop_reason: str | None
     model: str
+    refusal_category: str | None = None
 
     def tool_uses(self) -> list[Any]:
         return [b for b in self.content if _block_type(b) == "tool_use"]
+
+    @property
+    def is_refusal(self) -> bool:
+        """Rifiuto dei classificatori: HTTP 200, `stop_reason='refusal'`.
+
+        Non è un errore di rete e non è un verbale malformato: è il modello che
+        declina. Va contato a parte, altrimenti inquina il tasso di verbali
+        malformati con qualcosa che non riguarda il protocollo.
+        """
+        return self.stop_reason == "refusal"
 
 
 class LLMClient(Protocol):
@@ -93,7 +104,25 @@ class CallBudget:
 
 
 class AnthropicTraderClient:
-    """Client reale. Non viene mai istanziato dalla suite di test."""
+    """Client reale. Non viene mai istanziato dalla suite di test.
+
+    Scelte specifiche del modello pinnato in TL-002 (`claude-fable-5`):
+
+    - **Nessun parametro di sampling** (D4). Su Fable `temperature`, `top_p` e
+      `top_k` sono rimossi e inviarli produce 400: la policy dichiarata è anche
+      l'unica chiamata valida.
+    - **Nessuna configurazione di `thinking`.** Su Fable il thinking è sempre
+      attivo; `{"type": "disabled"}` e `budget_tokens` producono entrambi 400.
+      Si omette il parametro.
+    - **Streaming di default.** I turni di Fable possono durare minuti e
+      `max_tokens` è alto perché il thinking consuma lo stesso budget: senza
+      streaming si rischia il timeout HTTP dell'SDK.
+    - **Nessun `fallbacks`.** La guida generale dell'API consiglia di attivare
+      il fallback server-side su Fable, ma qui sarebbe **dannoso**: un rifiuto
+      verrebbe servito in silenzio da un altro modello, e D2 dice che un
+      cambio di modello apre un nuovo track record. Un rifiuto deve restare un
+      rifiuto, visibile e loggato.
+    """
 
     def __init__(
         self,
@@ -102,6 +131,8 @@ class AnthropicTraderClient:
         budget: CallBudget | None = None,
         max_retries: int = 3,
         base_backoff_seconds: float = 1.0,
+        timeout_seconds: float = 900.0,
+        use_streaming: bool = True,
         sleep=time.sleep,
         client: Any | None = None,
     ) -> None:
@@ -111,23 +142,32 @@ class AnthropicTraderClient:
                 "api_default_omitted (D4): i parametri di sampling non vengono "
                 "inviati affatto"
             )
+        if manifest.thinking_policy is not ThinkingPolicy.API_DEFAULT:
+            raise LLMError(
+                f"thinking_policy={manifest.thinking_policy.value} non è "
+                f"inviabile: su claude-fable-5 il thinking è sempre attivo e "
+                f"sia 'disabled' sia budget_tokens producono 400. L'unica "
+                f"policy valida è api_default (parametro omesso)."
+            )
         self._manifest = manifest
         self.model_version = manifest.model_string
         self._budget = budget or CallBudget(max_calls=200)
         self._max_retries = max_retries
         self._base_backoff = base_backoff_seconds
+        self._timeout = timeout_seconds
+        self._use_streaming = use_streaming
         self._sleep = sleep
-        self._client = client or self._build_client()
+        self._client = client or self._build_client(timeout_seconds)
 
     @staticmethod
-    def _build_client() -> Any:
+    def _build_client(timeout_seconds: float) -> Any:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise MissingApiKey(
                 "ANTHROPIC_API_KEY assente. La chiave si legge solo da ambiente."
             )
         import anthropic  # import locale: la suite non deve dipenderne
 
-        return anthropic.Anthropic()
+        return anthropic.Anthropic(timeout=timeout_seconds)
 
     @property
     def budget(self) -> CallBudget:
@@ -141,8 +181,9 @@ class AnthropicTraderClient:
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
         self._budget.consume()
-        # NOTA D4: nessun temperature / top_p / top_k. L'omissione E' la
-        # policy, non una dimenticanza.
+        # NOTA D4: nessun temperature / top_p / top_k. Nessun `thinking`.
+        # Nessun `fallbacks`. Ogni omissione qui e' una policy, non una
+        # dimenticanza: vedi il docstring della classe.
         payload = {
             "model": self._manifest.model_string,
             "max_tokens": self._manifest.max_tokens,
@@ -153,19 +194,36 @@ class AnthropicTraderClient:
         last_error: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
-                response = self._client.messages.create(**payload)
+                response = self._invoke(payload)
             except Exception as exc:  # noqa: BLE001 - classificato sotto
                 if not _is_retryable(exc) or attempt == self._max_retries:
                     raise LLMError(f"chiamata al modello fallita: {exc}") from exc
                 last_error = exc
                 self._sleep(self._base_backoff * (2**attempt))
                 continue
-            return LLMResponse(
-                content=list(response.content),
-                stop_reason=getattr(response, "stop_reason", None),
-                model=getattr(response, "model", self._manifest.model_string),
-            )
+            return _normalize_response(response, self._manifest.model_string)
         raise LLMError(f"chiamata al modello fallita: {last_error}")
+
+    def _invoke(self, payload: dict[str, Any]) -> Any:
+        """Streaming di default; `create` solo se esplicitamente disattivato."""
+        if not self._use_streaming:
+            return self._client.messages.create(**payload)
+        with self._client.messages.stream(**payload) as stream:
+            return stream.get_final_message()
+
+
+def _normalize_response(response: Any, fallback_model: str) -> LLMResponse:
+    stop_reason = getattr(response, "stop_reason", None)
+    category = None
+    if stop_reason == "refusal":
+        details = getattr(response, "stop_details", None)
+        category = getattr(details, "category", None) if details else None
+    return LLMResponse(
+        content=list(getattr(response, "content", []) or []),
+        stop_reason=stop_reason,
+        model=getattr(response, "model", fallback_model),
+        refusal_category=category,
+    )
 
 
 def _is_retryable(exc: Exception) -> bool:

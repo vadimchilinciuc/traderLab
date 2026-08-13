@@ -171,11 +171,22 @@ class DailyRunner:
             )
             if parsed.ok:
                 break
+            if parsed.reason is MalformedReason.MODEL_REFUSAL:
+                # Un rifiuto non si ritenta: l'input è identico, la risposta
+                # sarebbe identica, e Fable è il modello più caro del listino.
+                # Il retry singolo esiste per i verbali malformati, che sono
+                # un inciampo di formato, non per i rifiuti.
+                break
 
         assert parsed is not None
         if not parsed.ok:
-            verdict = RiskOfficer.reject_malformed(asset, parsed.detail)
-            telemetry.observe_malformed(replica_id, verdict)
+            is_refusal = parsed.reason is MalformedReason.MODEL_REFUSAL
+            if is_refusal:
+                verdict = RiskOfficer.reject_refusal(asset, parsed.detail)
+                telemetry.observe_refusal(replica_id, verdict)
+            else:
+                verdict = RiskOfficer.reject_malformed(asset, parsed.detail)
+                telemetry.observe_malformed(replica_id, verdict)
             self._write(
                 snapshot=snapshot,
                 replica_id=replica_id,
@@ -266,6 +277,22 @@ class DailyRunner:
             response = client.complete(
                 system=system, messages=messages, tools=self._tools
             )
+            # Rifiuto dei classificatori: HTTP 200 con content vuoto o parziale.
+            # Va intercettato qui, altrimenti il parser lo classificherebbe
+            # come "nessun blocco strutturato" e finirebbe tra i malformati.
+            if response.is_refusal:
+                return ParsedVerbale(
+                    ok=False,
+                    reason=MalformedReason.MODEL_REFUSAL,
+                    detail=(
+                        "il modello ha declinato la richiesta"
+                        + (
+                            f" (categoria: {response.refusal_category})"
+                            if response.refusal_category
+                            else ""
+                        )
+                    ),
+                )
             tool_uses = response.tool_uses()
             if not tool_uses:
                 break

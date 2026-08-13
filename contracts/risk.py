@@ -40,6 +40,9 @@ class RiskRule(StrEnum):
     ANTI_MARTINGALE = "anti_martingale"
     MALFORMED_VERBALE = "malformed_verbale"
     UNKNOWN_ASSET = "unknown_asset"
+    # Rifiuto dei classificatori di sicurezza del modello: non e' un verbale
+    # malformato ne' un errore di rete, e va contato a parte.
+    MODEL_REFUSAL = "model_refusal"
 
 
 class RiskVerdict(FrozenModel):

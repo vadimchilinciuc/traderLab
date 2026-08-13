@@ -13,19 +13,31 @@ Non riaperte in Fase 0. Dettaglio e conseguenze in `DECISION_LOG.md` (TL-001).
 | ID | Decisione | Dove vive nel codice |
 | --- | --- | --- |
 | **D1** | 3 repliche **identiche**: stesso modello, stesso prompt, stessa temperatura, stesso snapshot | `arena/runner.py`, `arena/config.py` |
-| **D2** | Modello pinnato **Claude Sonnet** via API Anthropic; model string più specifica disponibile, registrata nel Freeze manifest. **Cambio modello = nuovo track record** | `contracts/freeze.py`, `arena/llm_client.py` |
+| **D2** | ⚠️ **Superata da TL-002** → modello pinnato **`claude-fable-5`**. Principio invariato: model string più specifica disponibile, registrata nel Freeze manifest, **cambio modello = nuovo track record** | `contracts/freeze.py`, `arena/llm_client.py` |
 | **D3** | Stagione 0 = **4 settimane shadow a size FISSA**; il Trader decide solo direzione e dentro/fuori; `confidence` loggata dal giorno uno per il Brier score | `arena/risk_officer.py`, `ledger/telemetry.py` |
 | **D4** | Temperatura = **default operativo dell'API**, nessun override, **MAI 0**; ogni parametro di sampling dichiarato nel manifest | `contracts/freeze.py`, `arena/llm_client.py` |
 
-**Nota D2 (stato al 2026-08-13).** Gli ID dei modelli Claude correnti sono
-completi così come sono: per la Sonnet corrente **non esiste una variante
-datata** e aggiungere un suffisso data produce 404. La string più specifica
-disponibile è `claude-sonnet-5`. Il pin **non è ancora effettuato**.
+**Nota D2 (TL-002, 2026-08-13).** Il Trader è pinnato su **`claude-fable-5`**,
+il modello più capace disponibile via API: il Lab chiede se un agente LLM sa
+battere la macchina, e la domanda merita il cervello più forte. Anche qui la
+string è **completa così com'è**: non esiste una variante datata e un suffisso
+data produce 404. Il pin **non è ancora effettuato** (`ots_pending=True`);
+`scripts/verify_pin.py` ri-verifica la string contro l'endpoint il giorno del
+pin. Il **fallback server-side è deliberatamente disattivato**: servirebbe un
+rifiuto con un altro modello, cioè produrre track record con un modello diverso
+da quello pinnato.
 
-**Nota D4 (stato al 2026-08-13).** Sui Sonnet correnti i parametri di sampling
-non-default sono rifiutati dall'API con 400. Il default operativo si ottiene
-**per omissione**: il client non invia `temperature`, `top_p`, `top_k`. Il
-manifest lo registra come `sampling_policy="api_default_omitted"`.
+**Nota D4 (ri-verificata su Fable, TL-002).** **Policy identica e confermata.**
+Su `claude-fable-5` i parametri di sampling non-default sono rifiutati con 400,
+quindi il default operativo si ottiene **per omissione** — il client non invia
+`temperature`, `top_p`, `top_k`. Lo stesso vale per `thinking`, che su Fable è
+sempre attivo e non disattivabile: `thinking_policy=api_default` è l'unico
+valore ammesso e il client rifiuta gli altri.
+
+**Precondizione operativa nuova (Fable).** `claude-fable-5` richiede **30
+giorni di data retention**: con l'organizzazione in zero-data-retention *ogni*
+chiamata risponde 400, indipendentemente dal payload. Da verificare prima del
+pin.
 
 ---
 
@@ -116,25 +128,42 @@ Nessuna di queste voci è risolvibile dentro `traderLab`: sono precondizioni.
 | 1 | **Universo ufficiale dal Pre-Screen** | `zeroPipes` | L'universo attuale è `placeholder_non_ufficiale` ed è marcato tale dentro lo snapshot. Non si apre una stagione su un universo placeholder. |
 | 2 | **Gamba meccanica per il confronto appaiato** | da costruire | Senza di essa l'e-process non ha un secondo braccio: gira solo su dati sintetici. Il kill-criterion non è valutabile. |
 | 3 | **PREREG_LAB_S0** (documento a parte, futuro) | owner | Pre-registrazione di soglie, dimensioni campionarie e azioni conseguenti, timestampata **prima** dell'accumulo dati. |
-| 4 | **Pin effettivo del modello + OTS del FreezeManifest** | owner | `ots_pending=True` finché non c'è la proof. Senza pin timestampato il track record non è difendibile. |
-| 5 | **Soglie della suite di regressione fissate dall'owner** | owner | Vedi TODO-owner qui sotto. Vanno fissate **prima** della raccolta della baseline, non dopo averla vista. |
+| 4 | **Pin effettivo del modello + OTS del FreezeManifest** | owner | `ots_pending=True` finché non c'è la proof. Eseguire prima `scripts/verify_pin.py`. |
+| 5 | **Data retention a 30 giorni sull'organizzazione** | owner | Precondizione di `claude-fable-5`: in zero-data-retention **ogni** chiamata risponde 400. |
 
-### TODO-owner — soglie della suite di regressione
+~~5. Soglie della suite di regressione~~ → **chiuse da TL-002** (vedi sotto).
 
-Da fissare **prima** di raccogliere la baseline (Blocco 6). La metrica di
-deriva è dichiarata ora; le soglie no.
+### Soglie della suite di regressione — fissate da TL-002 ✅
+
+I quattro `TODO-owner` sono **chiusi**. L'owner ha fissato una regola, che
+`arena.regression.thresholds_from_baseline` applica meccanicamente.
 
 | Parametro | Valore | Stato |
 | --- | --- | --- |
-| Metrica di deriva primaria | **action agreement rate**: quota di campioni con la stessa azione della baseline per snapshot, mediata sugli snapshot | ✅ dichiarata |
-| Metrica di deriva secondaria | **distanza assoluta media sulla confidence** rispetto alla baseline | ✅ dichiarata |
-| Numero di Decision Snapshot congelati | 10-15, scelti in Stagione 0, **una volta e mai più toccati** | ✅ dichiarato |
+| Metrica di deriva primaria | **action agreement rate** | ✅ dichiarata |
+| Metrica di deriva secondaria | **distanza assoluta media sulla confidence** | ✅ dichiarata |
+| Numero di Decision Snapshot congelati | 10-15, **una volta e mai più toccati** | ✅ dichiarato |
 | Campioni per snapshot (k) | 5 | ✅ dichiarato |
 | Cadenza di rigioco | settimanale | ✅ dichiarata |
-| **Soglia di ALLARME** su agreement rate | `TODO-owner` | ⛔ da fissare |
-| **Soglia di SUNSET** su agreement rate | `TODO-owner` | ⛔ da fissare |
-| **Soglia di ALLARME** su distanza confidence | `TODO-owner` | ⛔ da fissare |
-| **Soglia di SUNSET** su distanza confidence | `TODO-owner` | ⛔ da fissare |
+| Soglia di **ALLARME** su agreement | `baseline − 0.15`, pavimento **0.70** | ✅ TL-002 |
+| Soglia di **SUNSET** su agreement | `baseline − 0.30`, pavimento **0.50** | ✅ TL-002 |
+| Soglia di **ALLARME** su distanza confidence | **+0.10** | ✅ TL-002 |
+| Soglia di **SUNSET** su distanza confidence | **+0.20** | ✅ TL-002 |
+
+**Cosa resta da fare il giorno della baseline**: applicare la regola e
+trascrivere i quattro valori assoluti in `arena/config.py`.
+`ThresholdDerivation.as_config_literal()` li produce già formattati.
+
+**Due punti di interpretazione dichiarati** (dettaglio in `DECISION_LOG.md`
+TL-002): "baseline" è l'**auto-accordo** della baseline
+(`Baseline.self_agreement_rate`), non 1.0; e il **pavimento può mordere** —
+con auto-accordo ≤ 0.70 la suite allarmerebbe sul comportamento di baseline, e
+la derivazione segnala il caso (`is_degenerate`) invece di nasconderlo.
+
+**Pre-registrazione**: ora che le soglie si derivano dalla baseline,
+l'artefatto pre-registrato è la **regola**. La sua impronta è incisa nella
+`Baseline` alla raccolta, e `evaluate(report, baseline=...)` solleva
+`ThresholdRuleChanged` se la regola è cambiata dopo aver visto i dati.
 
 **Aggancio al model sunset**: deriva oltre la soglia di sunset ⇒ il track record
 si chiude **pulito** in quel punto e ne inizia uno nuovo. Non si "aggiusta" un
