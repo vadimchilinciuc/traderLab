@@ -33,12 +33,15 @@ manifest lo registra come `sampling_policy="api_default_omitted"`.
 
 | # | Blocco | Stato | Commit |
 | --- | --- | --- | --- |
-| 1 | Scaffold + contratti Pydantic v2 | ✅ fatto | `feat(contracts)` |
-| 2 | Tool Server con snapshot congelato | ⬜ da fare | — |
-| 3 | Decision Record enforcement + Risk Officer | ⬜ da fare | — |
-| 4 | Ledger + telemetria + e-process | ⬜ da fare | — |
-| 5 | Orchestratore repliche | ⬜ da fare | — |
-| 6 | Suite di regressione comportamentale (design + scheletro) | ⬜ da fare | — |
+| 1 | Scaffold + contratti Pydantic v2 | ✅ fatto | `feat(blocco1)` |
+| 2 | Tool Server con snapshot congelato | ✅ fatto | `feat(blocco2)` |
+| 3 | Decision Record enforcement + Risk Officer | ✅ fatto | `feat(blocco3)` |
+| 4 | Ledger + telemetria + e-process | ✅ fatto | `feat(blocco4)` |
+| 5 | Orchestratore repliche | ✅ fatto | `feat(blocco5)` |
+| 6 | Suite di regressione comportamentale (design + scheletro) | ✅ fatto | `feat(blocco6)` |
+
+**Suite**: 213 test verdi, 1 skipped (lo smoke con API reale, dietro flag).
+La suite gira **senza rete e senza API key**.
 
 ### Blocco 1 — Scaffold + contratti ✅
 
@@ -50,6 +53,57 @@ manifest lo registra come `sampling_policy="api_default_omitted"`.
 - Vocabolario chiuso delle feature primitive (`contracts/vocabulary.py`).
 - Test: round-trip di serializzazione, immutabilità, rifiuto dei campi extra,
   determinismo dello `snapshot_id`, disciplina point-in-time.
+
+### Blocco 2 — Tool Server con snapshot congelato ✅
+
+- `SnapshotBuilder`: snapshot del giorno costruito UNA volta, a ora UTC fissa,
+  da API pubblica Hyperliquid. Universo placeholder marcato **dentro** lo
+  snapshot. Filtro anti look-ahead strutturale (solo barre chiuse).
+- `SnapshotStore`: persistenza per `snapshot_id`, ri-validazione in lettura.
+- `ToolRegistry`: sei tool read-only, strict e chiusi, con descrizioni neutre.
+- Log JSONL append-only di ogni tool call, anche di quelle fallite.
+- Firewall: store e registry non importano `httpx` né il client Hyperliquid;
+  ogni path contenente `zeropipes` è rifiutato; la rete richiede un flag.
+
+### Blocco 3 — Decision Record enforcement + Risk Officer ✅
+
+- Parser che impone **razionale libero PRIMA, blocco strutturato DOPO**.
+  `tool_choice` deliberatamente **non** forzato: forzarlo sopprimerebbe il
+  testo che deve precedere.
+- Verbale non conforme = NO TRADE (`rejected_malformed`), con motivo
+  categorizzato e un solo retry dichiarato.
+- `RiskOfficer` puro: asset ammesso → un cambio al giorno → size fissa (D3) →
+  cap leva 3x → anti-martingala (dormiente con size fissa, testata comunque).
+
+### Blocco 4 — Ledger + telemetria + e-process ✅
+
+- Ledger JSONL append-only con hash-chain e `verify()` che dice **dove** si
+  rompe; write-once per (giorno, replica, asset), persistente tra riaperture.
+- Telemetria per replica: turnover, flip rate, tentativi bloccati per regola,
+  tasso di malformati, dispersione inter-repliche, componenti del Brier.
+- E-process anytime-valid (betting + ONS), **unilaterale** per costruzione.
+- Kill-criterion pre-registrato **in codice**.
+
+### Blocco 5 — Orchestratore repliche ✅
+
+- Runner giornaliero: snapshot congelato → 3 repliche in isolamento → verbali
+  → Risk Officer → ShadowFill → ledger.
+- Client Anthropic con model string dal manifest, **nessun parametro di
+  sampling inviato** (D4), API key solo da env, retry/backoff sui soli errori
+  ritentabili, budget guard giornaliero.
+- `MockLLM` deterministico: la pipeline gira end-to-end **senza API**.
+- Smoke con API reale isolato dietro `TRADERLAB_ALLOW_LIVE_API=1`.
+
+### Blocco 6 — Suite di regressione comportamentale ✅ (design + scheletro)
+
+- Set di 10-15 Decision Snapshot congelabile **una volta e mai più**
+  (`freeze()` rifiuta di sovrascrivere), k=5 campioni per snapshot, cadenza
+  settimanale.
+- Metrica di deriva **dichiarata ora**, prima di ogni baseline.
+- Soglie `TODO-owner`: `collect_baseline()` e `evaluate()` **sollevano** se non
+  sono state fissate. Nessun default silenzioso.
+- Un verbale malformato conta come **disaccordo**, non come campione da
+  scartare: un modello che smette di rispettare il protocollo è derivato.
 
 ---
 

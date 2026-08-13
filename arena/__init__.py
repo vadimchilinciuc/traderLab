@@ -17,6 +17,15 @@ from arena.llm_client import (
     LLMResponse,
     MockLLM,
 )
+from arena.regression import (
+    SAMPLES_PER_SNAPSHOT,
+    BehavioralRegressionSuite,
+    DecisionSnapshotRef,
+    DriftReport,
+    DriftThresholds,
+    DriftVerdict,
+    ThresholdsNotSet,
+)
 from arena.risk_officer import PortfolioState, RiskConfig, RiskOfficer
 from arena.runner import AssetOutcome, DailyRunner, DailyRunResult
 from arena.shadow_fill import compute_shadow_fill
@@ -30,10 +39,17 @@ from arena.verbale import (
 __all__ = [
     "DEFAULT_MODEL_STRING",
     "DEFAULT_REPLICA_IDS",
+    "SAMPLES_PER_SNAPSHOT",
     "SUBMIT_DECISION_SCHEMA",
     "AnthropicTraderClient",
     "ArenaConfig",
     "AssetOutcome",
+    "BehavioralRegressionSuite",
+    "DecisionSnapshotRef",
+    "DriftReport",
+    "DriftThresholds",
+    "DriftVerdict",
+    "ThresholdsNotSet",
     "BudgetExceeded",
     "CallBudget",
     "ContextFiles",
