@@ -604,6 +604,128 @@ def test_classificazione_degli_errori_ritentabili():
 
 
 # --------------------------------------------------------------------------
+# Errori arrivati DENTRO lo stream: HTTP 200, il verdetto sta nel `type`
+# --------------------------------------------------------------------------
+
+
+class _FakeHttpResponse:
+    """Risposta HTTP dello stream: 200, perché gli header sono già partiti."""
+
+    status_code = 200
+
+
+class _InStreamAPIError(Exception):
+    """Come l'`APIError` nudo che l'SDK solleva su un evento `error`.
+
+    Nessuno `status_code` proprio, `response.status_code` a 200, e il tipo
+    reale dell'errore solo dentro il corpo.
+    """
+
+    def __init__(self, error_type, *, wrapped=False, declare_type=False):
+        super().__init__(error_type)
+        payload = {"type": error_type, "message": "in-stream"}
+        self.body = {"error": payload} if wrapped else payload
+        self.response = _FakeHttpResponse()
+        if declare_type:
+            self.type = error_type
+
+    __name__ = "APIError"
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    ["overloaded_error", "rate_limit_error", "api_error"],
+)
+def test_errore_in_stream_transitorio_e_ritentabile(error_type):
+    """Il difetto trovato dallo smoke: 200 nello stream, ma non è definitivo."""
+    assert _is_retryable(_InStreamAPIError(error_type))
+    assert _is_retryable(_InStreamAPIError(error_type, wrapped=True))
+    assert _is_retryable(_InStreamAPIError(error_type, declare_type=True))
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        "invalid_request_error",
+        "authentication_error",
+        "permission_error",
+        "not_found_error",
+    ],
+)
+def test_errore_in_stream_semantico_non_e_ritentabile(error_type):
+    """I 4xx restano definitivi anche se arrivano a stream aperto."""
+    assert not _is_retryable(_InStreamAPIError(error_type))
+    assert not _is_retryable(_InStreamAPIError(error_type, wrapped=True))
+
+
+def test_errore_in_stream_di_tipo_ignoto_non_e_ritentabile():
+    """Senza `type` riconosciuto e con HTTP 200 non si inventa un retry."""
+    assert not _is_retryable(_InStreamAPIError("qualcosa_di_nuovo"))
+
+
+def test_retry_effettivo_su_overloaded_arrivato_dentro_lo_stream():
+    """Regressione end-to-end: prima il retry non scattava mai (200 = fatale)."""
+    tentativi = {"n": 0}
+    dormite = []
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            tentativi["n"] += 1
+            if tentativi["n"] < 3:
+                raise _InStreamAPIError("overloaded_error")
+            return _FakeStream(_FakeResponse())
+
+    class FakeAnthropic:
+        messages = FakeMessages()
+
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=FakeAnthropic(), sleep=dormite.append
+    )
+    client.complete(system="s", messages=[], tools=[])
+    assert tentativi["n"] == 3
+    assert dormite == [1.0, 2.0]
+
+
+def test_400_in_stream_non_consuma_i_tentativi():
+    tentativi = {"n": 0}
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            tentativi["n"] += 1
+            raise _InStreamAPIError("invalid_request_error")
+
+    class FakeAnthropic:
+        messages = FakeMessages()
+
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=FakeAnthropic(), sleep=lambda _: None
+    )
+    with pytest.raises(LLMError):
+        client.complete(system="s", messages=[], tools=[])
+    assert tentativi["n"] == 1
+
+
+def test_il_rifiuto_resta_categoria_propria_e_non_un_errore():
+    """`stop_reason='refusal'` non passa mai dalla classificazione degli errori."""
+
+    class Details:
+        category = "cyber"
+
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest,
+        client=_fake_streaming_client(
+            _FakeResponse(stop_reason="refusal", stop_details=Details())
+        ),
+        sleep=lambda _: None,
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.is_refusal and response.refusal_category == "cyber"
+
+
+# --------------------------------------------------------------------------
 # Freeze manifest costruito dal contenuto reale
 # --------------------------------------------------------------------------
 

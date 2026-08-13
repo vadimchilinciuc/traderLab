@@ -226,13 +226,69 @@ def _normalize_response(response: Any, fallback_model: str) -> LLMResponse:
     )
 
 
+# Classificazione per `type` del corpo dell'errore API. Serve perché un errore
+# transitorio può arrivare **dentro** lo stream: l'HTTP è già 200, quindi lo
+# status code non dice nulla e da solo farebbe passare per definitivo un
+# overloaded. Il `type` invece è lo stesso in-stream e fuori stream.
+_RETRYABLE_ERROR_TYPES = frozenset(
+    {
+        "overloaded_error",  # 529
+        "rate_limit_error",  # 429
+        "api_error",  # 500
+        "timeout_error",
+    }
+)
+_FATAL_ERROR_TYPES = frozenset(
+    {
+        "invalid_request_error",  # 400
+        "authentication_error",  # 401
+        "permission_error",  # 403
+        "not_found_error",  # 404
+        "request_too_large",  # 413
+        "billing_error",
+    }
+)
+
+
+def _error_type(exc: Exception) -> str | None:
+    """Il campo `type` dell'errore API, ovunque l'SDK lo abbia messo.
+
+    Fuori stream l'SDK espone `.type` sulle sottoclassi di `APIStatusError`.
+    Dentro lo stream l'evento `error` diventa un `APIError` nudo che porta il
+    corpo in `.body`, a volte già spacchettato (`{"type": ...}`), a volte
+    ancora avvolto (`{"error": {"type": ...}}`).
+    """
+    declared = getattr(exc, "type", None)
+    if isinstance(declared, str):
+        return declared
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error")
+        if isinstance(inner, dict) and isinstance(inner.get("type"), str):
+            return inner["type"]
+        if isinstance(body.get("type"), str):
+            return body["type"]
+    return None
+
+
 def _is_retryable(exc: Exception) -> bool:
-    """429 e 5xx sono ritentabili; un 400 è un errore di richiesta, non di rete."""
+    """Ritentabile se lo dice il `type`; altrimenti 429 e 5xx; altrimenti classe.
+
+    Il `type` viene per primo perché è l'unico segnale valido quando l'errore
+    arriva a stream aperto: lì `response.status_code` vale 200 e classificare
+    per status trasformerebbe ogni overloaded in un errore definitivo.
+    """
+    error_type = _error_type(exc)
+    if error_type in _RETRYABLE_ERROR_TYPES:
+        return True
+    if error_type in _FATAL_ERROR_TYPES:
+        return False
+
     status = getattr(exc, "status_code", None)
     if status is None:
         response = getattr(exc, "response", None)
         status = getattr(response, "status_code", None)
-    if isinstance(status, int):
+    if isinstance(status, int) and status != 200:
         return status == 429 or status >= 500
     return exc.__class__.__name__ in {
         "APIConnectionError",
