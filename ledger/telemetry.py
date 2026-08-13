@@ -114,6 +114,8 @@ class ReplicaMetrics:
     malformed_rate: float
     refusals_total: int
     refusal_rate: float
+    truncated_total: int
+    truncated_rate: float
     blocked_attempts: int
     blocked_by_rule: dict[str, int]
     clamped_total: int
@@ -131,6 +133,7 @@ class ReplicaCounters:
     decisions_directional: int = 0
     malformed_total: int = 0
     refusals_total: int = 0
+    truncated_total: int = 0
     clamped_total: int = 0
     blocked_by_rule: dict[str, int] = field(default_factory=dict)
     turnover: float = 0.0
@@ -202,6 +205,18 @@ class BehavioralTelemetry:
         counters.refusals_total += 1
         self._count_block(counters, verdict.rule)
 
+    def observe_truncated(self, replica_id: str, verdict: RiskVerdict) -> None:
+        """Risposta troncata da `max_tokens`: contata a parte da malformati e rifiuti.
+
+        Come per il rifiuto dei classificatori, mescolarla con il tasso di
+        verbali malformati inquinerebbe la lettura di quest'ultimo: qui il
+        protocollo non ha fallito, è mancato lo spazio nel budget di token.
+        """
+        counters = self._for(replica_id)
+        counters.decisions_total += 1
+        counters.truncated_total += 1
+        self._count_block(counters, verdict.rule)
+
     def observe_outcome(self, replica_id: str, confidence: float, correct: bool) -> None:
         """Alimenta il Brier score. Usato solo quando esistono esiti."""
         self._for(replica_id).brier.add(confidence, 1 if correct else 0)
@@ -232,6 +247,10 @@ class BehavioralTelemetry:
             refusals_total=c.refusals_total,
             refusal_rate=(
                 c.refusals_total / c.decisions_total if c.decisions_total else 0.0
+            ),
+            truncated_total=c.truncated_total,
+            truncated_rate=(
+                c.truncated_total / c.decisions_total if c.decisions_total else 0.0
             ),
             blocked_attempts=blocked,
             blocked_by_rule=dict(sorted(c.blocked_by_rule.items())),

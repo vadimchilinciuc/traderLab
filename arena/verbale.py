@@ -153,6 +153,10 @@ class MalformedReason(StrEnum):
     # Il modello ha declinato (stop_reason='refusal'). Categoria a se': non e'
     # il protocollo ad aver fallito.
     MODEL_REFUSAL = "model_refusal"
+    # La risposta e' stata tagliata da max_tokens (stop_reason='max_tokens').
+    # Rilevato in `arena/runner.py` prima del parsing: un verbale troncato non
+    # arriva nemmeno a questo modulo con un blocco strutturato completo.
+    TRUNCATED = "truncated"
 
 
 @dataclass(frozen=True, slots=True)

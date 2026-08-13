@@ -350,6 +350,63 @@ def test_un_rifiuto_non_e_un_verbale_malformato(wired):
     assert ledger.verify().ok
 
 
+def test_una_risposta_troncata_e_no_trade_categoria_propria(wired):
+    """stop_reason='max_tokens' e' INVALIDO: NO TRADE, mai un verbale parziale.
+
+    Guardia sul troncamento (rito tuning max_tokens): un tetto piu' basso
+    riduce lo shedding nei picchi, ma puo' tagliare un turno insolitamente
+    lungo. La categoria e' distinta sia da `malformed` sia da `refusal`.
+    """
+    store, snapshot, ledger, tool_log = wired
+
+    class TronchaSempre:
+        model_version = "fable-fake"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, *, system, messages, tools):
+            self.calls += 1
+            return LLMResponse(
+                content=[{"type": "text", "text": "Il razionale si interrompe qui"}],
+                stop_reason="max_tokens",
+                model="claude-fable-5",
+            )
+
+    clients = {}
+
+    def factory(replica_id):
+        clients[replica_id] = TronchaSempre()
+        return clients[replica_id]
+
+    result = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=factory,
+        context_git_sha="abcdef1",
+    ).run_day(snapshot.snapshot_id, run_id="run-1")
+
+    for outcome in result.outcomes:
+        assert outcome.verdict.rule is RiskRule.TRUNCATED_RESPONSE
+        assert outcome.verdict.outcome is RiskOutcome.REJECTED
+        assert outcome.malformed_reason is MalformedReason.TRUNCATED
+        assert outcome.decision is None
+        # Un solo retry dichiarato, come per un verbale malformato.
+        assert outcome.attempts == 2
+
+    for m in result.telemetry.all_metrics().values():
+        assert m.truncated_rate == pytest.approx(1.0)
+        assert m.refusal_rate == pytest.approx(0.0)
+        assert m.malformed_rate == pytest.approx(0.0)
+        assert m.blocked_by_rule["truncated_response"] == len(snapshot.universe)
+
+    # Un retry dichiarato: due chiamate per asset, non una.
+    for client in clients.values():
+        assert client.calls == 2 * len(snapshot.universe)
+    assert ledger.verify().ok
+
+
 def test_telemetria_conta_i_malformati(wired):
     _, snapshot, _, _ = wired
     result = _runner(wired, behaviour="malformed").run_day(
@@ -530,9 +587,16 @@ def test_il_client_streamma_di_default():
     assert usato["stream"] is True
 
 
-def test_max_tokens_lascia_spazio_al_thinking_sempre_attivo():
-    """Su Fable il thinking consuma lo stesso budget della risposta."""
-    assert DEFAULT_MAX_TOKENS >= 16_000
+def test_max_tokens_e_il_tetto_deciso_dal_tuning_anti_shedding():
+    """Tuning (diagnosi C): 8_000 evita lo shedding nei picchi di carico.
+
+    Su Fable il thinking consuma lo stesso budget della risposta, quindi il
+    tetto resta un compromesso: abbastanza basso da non farsi scartare
+    dall'overloaded in-stream, abbastanza alto per un verbale completo nel
+    caso comune. La guardia sul troncamento (`stop_reason="max_tokens"`)
+    copre il caso raro in cui non basta.
+    """
+    assert DEFAULT_MAX_TOKENS == 8_000
 
 
 def test_il_client_reale_rispetta_il_budget():
@@ -561,6 +625,23 @@ def test_rifiuto_del_modello_riconosciuto_e_categorizzato():
     response = client.complete(system="s", messages=[], tools=[])
     assert response.is_refusal
     assert response.refusal_category == "cyber"
+
+
+def test_il_client_lascia_passare_stop_reason_max_tokens():
+    """stop_reason='max_tokens' e' HTTP 200: il client non lo tratta da errore.
+
+    La classificazione (NO TRADE, categoria 'truncated') vive nel runner
+    (`arena/runner.py`), non nel client: qui basta che il client non la
+    inghiotta ne' la scambi per un rifiuto.
+    """
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest,
+        client=_fake_streaming_client(_FakeResponse(stop_reason="max_tokens")),
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.stop_reason == "max_tokens"
+    assert response.is_refusal is False
 
 
 def test_retry_con_backoff_su_errore_ritentabile():

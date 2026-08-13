@@ -43,6 +43,10 @@ class RiskRule(StrEnum):
     # Rifiuto dei classificatori di sicurezza del modello: non e' un verbale
     # malformato ne' un errore di rete, e va contato a parte.
     MODEL_REFUSAL = "model_refusal"
+    # stop_reason="max_tokens": la risposta e' stata troncata dal tetto di
+    # token. Non e' un verbale malformato (il modello non ha violato il
+    # protocollo, gli e' mancato lo spazio) ne' un rifiuto: categoria propria.
+    TRUNCATED_RESPONSE = "truncated_response"
 
 
 class RiskVerdict(FrozenModel):

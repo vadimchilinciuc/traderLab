@@ -188,6 +188,24 @@ class RiskOfficer:
             detail=f"{asset}: {detail}"[:500],
         )
 
+    @staticmethod
+    def reject_truncated(asset: str, detail: str) -> RiskVerdict:
+        """Verdetto per una risposta troncata da `max_tokens`: NO TRADE.
+
+        Categoria propria, distinta sia da `malformed_verbale` (il modello ha
+        rispettato il protocollo, ma non ha avuto lo spazio per finire) sia da
+        `model_refusal` (qui non c'è alcun rifiuto, solo un tetto raggiunto).
+        """
+        return RiskVerdict(
+            outcome=RiskOutcome.REJECTED,
+            rule=RiskRule.TRUNCATED_RESPONSE,
+            action_in=Action.FLAT,
+            action_out=Action.FLAT,
+            size_fraction_in=0.0,
+            size_fraction_out=0.0,
+            detail=f"{asset}: {detail}"[:500],
+        )
+
 
 def _approve(action: Action, size: float) -> RiskVerdict:
     return RiskVerdict(

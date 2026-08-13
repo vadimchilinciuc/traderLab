@@ -37,10 +37,17 @@ DEFAULT_MODEL_NOTE = (
 
 # Fable ha il thinking SEMPRE ATTIVO e non disattivabile, e i token di
 # ragionamento consumano max_tokens insieme alla risposta. Un tetto tarato su
-# un modello senza thinking tronca la risposta a meta'. Sopra i ~16k
-# l'SDK richiede streaming per non incorrere nei timeout HTTP: il client
-# streamma di default (vedi arena/llm_client.py).
-DEFAULT_MAX_TOKENS = 32_000
+# un modello senza thinking tronca la risposta a meta'.
+#
+# Tuning (rito max_tokens, diagnosi C): con max_tokens=32_000 Fable veniva
+# scartato dallo shedding lato server nei picchi di carico (overloaded
+# in-stream); con un budget ridotto la chiamata passa. Decisione owner: tetto
+# a 8_000, dichiarato qui e nel FreezeManifest. Il rovescio della medaglia e'
+# che un turno insolitamente lungo (razionale esteso o thinking prolungato)
+# puo' troncare la risposta: la guardia in `arena/runner.py` intercetta
+# `stop_reason="max_tokens"` e forza NO TRADE (`MalformedReason.TRUNCATED`),
+# mai un verbale parziale silenzioso.
+DEFAULT_MAX_TOKENS = 8_000
 DEFAULT_MAX_TOOL_ITERATIONS = 10
 # Fable e' il modello piu' caro del listino: il tetto di chiamate non e' una
 # formalita'.

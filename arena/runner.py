@@ -210,10 +210,12 @@ class DailyRunner:
 
         assert parsed is not None
         if not parsed.ok:
-            is_refusal = parsed.reason is MalformedReason.MODEL_REFUSAL
-            if is_refusal:
+            if parsed.reason is MalformedReason.MODEL_REFUSAL:
                 verdict = RiskOfficer.reject_refusal(asset, parsed.detail)
                 telemetry.observe_refusal(replica_id, verdict)
+            elif parsed.reason is MalformedReason.TRUNCATED:
+                verdict = RiskOfficer.reject_truncated(asset, parsed.detail)
+                telemetry.observe_truncated(replica_id, verdict)
             else:
                 verdict = RiskOfficer.reject_malformed(asset, parsed.detail)
                 telemetry.observe_malformed(replica_id, verdict)
@@ -355,6 +357,18 @@ class DailyRunner:
                             else ""
                         )
                     ),
+                )
+            # Guardia troncamento: stop_reason="max_tokens" e' HTTP 200 con un
+            # contenuto potenzialmente incompleto (testo a meta', tool_use con
+            # argomenti tagliati). Va intercettato qui, prima di consegnare il
+            # blocco al parser: un verbale tagliato non e' un verbale
+            # malformato dal modello, e non deve mai finire in un tool_result
+            # parziale interpretato come definitivo.
+            if response.stop_reason == "max_tokens":
+                return ParsedVerbale(
+                    ok=False,
+                    reason=MalformedReason.TRUNCATED,
+                    detail="risposta troncata da max_tokens prima di un verbale completo",
                 )
             tool_uses = response.tool_uses()
             if not tool_uses:
