@@ -121,6 +121,17 @@ violarle invalida il track record.
 | Riscrivere una riga di ledger | §9 |
 | Cambiare modello senza nuovo track record | §10 |
 
+## Convenzione dei context file
+
+Nei file di `agents/trader_v0/` le righe che iniziano con `>` (blockquote) sono
+**note per chi mantiene il Lab** e vengono rimosse prima di comporre il prompt
+effettivo (`arena.config.strip_editorial`). Senza questo filtro la nota che
+dice "questo testo non parla di repliche" sarebbe essa stessa un riferimento
+alle repliche dentro il contesto del modello.
+
+Gli sha del Freeze manifest si calcolano sul **file come sta su disco**, non
+sul testo ripulito: è il file che viene congelato.
+
 ## Convenzioni di codice
 
 - Python 3.13, `uv` per l'ambiente, Pydantic v2 per **tutti** i contratti.

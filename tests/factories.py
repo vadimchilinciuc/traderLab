@@ -37,7 +37,9 @@ def make_bars(n: int, start_price: float, asof: datetime = ASOF) -> tuple[OHLCVB
     price = start_price
     for i in range(n):
         ts = asof - timedelta(days=n - i)
-        close = price * (1.0 + 0.002 * ((i % 7) - 3))
+        # Deriva lieve verso l'alto + oscillazione: serve a esercitare sia il
+        # ramo direzionale sia quello di uscita del MockLLM.
+        close = price * (1.0 + 0.004 + 0.002 * ((i % 7) - 3))
         high = max(price, close) * 1.01
         low = min(price, close) * 0.99
         bars.append(
