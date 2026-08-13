@@ -114,9 +114,33 @@ class DailyRunner:
 
     # -- API principale ----------------------------------------------------
 
-    def run_day(self, snapshot_id: str, run_id: str) -> DailyRunResult:
+    def run_day(
+        self,
+        snapshot_id: str,
+        run_id: str,
+        telemetry: BehavioralTelemetry | None = None,
+    ) -> DailyRunResult:
+        """Esegue una giornata.
+
+        `telemetry` accetta un accumulatore esterno: turnover e flip rate si
+        misurano **tra** giornate, non dentro una. Con un accumulatore nuovo a
+        ogni giorno il flip rate resterebbe zero per costruzione, perché non
+        esisterebbe mai una posizione precedente da confrontare. Se non viene
+        passato nulla si torna al comportamento di prima: un accumulatore per
+        la sola giornata.
+        """
+        if run_id != self._tool_log.run_id:
+            # Il `tool_calls_ref` scritto in ogni verbale viene dal tool log.
+            # Con run_id diversi il ledger direbbe una giornata e il verbale ne
+            # indicherebbe un'altra: l'attribuzione punterebbe al file
+            # sbagliato, in silenzio. Errore pulito (CLAUDE.md §7, §9).
+            raise RunnerError(
+                f"run_id '{run_id}' non corrisponde al tool log "
+                f"'{self._tool_log.run_id}': tool_calls_ref punterebbe a una "
+                f"giornata diversa da quella scritta nel ledger"
+            )
         snapshot = self._store.load(snapshot_id)
-        telemetry = BehavioralTelemetry(self._config.replica_ids)
+        telemetry = telemetry or BehavioralTelemetry(self._config.replica_ids)
         result = DailyRunResult(
             run_id=run_id,
             snapshot_id=snapshot_id,
