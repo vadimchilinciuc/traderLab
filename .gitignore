@@ -16,5 +16,7 @@ data/ledger/*
 !data/ledger/.gitkeep
 data/toolcalls/*
 !data/toolcalls/.gitkeep
+data/logs/*
+!data/logs/.gitkeep
 
 .idea/
