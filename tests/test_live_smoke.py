@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from arena.config import ArenaConfig, build_freeze_manifest
+from arena.config import ArenaConfig, build_freeze_manifest, current_git_sha
 from arena.llm_client import AnthropicTraderClient, CallBudget
 from arena.runner import DailyRunner
 from ledger.trader_ledger import TraderLedger
@@ -35,7 +35,11 @@ def test_smoke_una_replica_una_decisione_con_api_reale(tmp_path):
     store.save(snapshot)
 
     manifest = build_freeze_manifest(ASOF)
-    budget = CallBudget(max_calls=8)
+    # max_calls=16: osservato nel rito del 2026-08-13 che un giro reale
+    # (BTC + ETH, con retry per overloaded_error) consuma 8 chiamate
+    # llm_complete da solo; 16 lascia margine a un secondo verbale malformato
+    # senza esaurire il budget per un difetto del solo harness di test.
+    budget = CallBudget(max_calls=16)
 
     runner = DailyRunner(
         store=store,
@@ -44,9 +48,13 @@ def test_smoke_una_replica_una_decisione_con_api_reale(tmp_path):
         client_factory=lambda rid: AnthropicTraderClient(manifest, budget=budget),
         # Una sola replica e un solo giro: lo smoke non è una stagione.
         config=ArenaConfig(replica_ids=("smoke",), malformed_retries=1),
-        context_git_sha="smoke00",
+        # Sha reale del repo al momento del rito: il contesto del verbale
+        # è il commit corrente, non un placeholder letterale non-esadecimale.
+        context_git_sha=current_git_sha(),
     )
     result = runner.run_day(snapshot.snapshot_id, run_id="smoke")
+
+    print(f"\nCallBudget: {budget.used}/{budget.max_calls} chiamate usate")
 
     assert result.outcomes
     for outcome in result.outcomes:
