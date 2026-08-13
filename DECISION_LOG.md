@@ -7,6 +7,7 @@ decisione che cambia si supera con una voce nuova, non si riscrive.
 | --- | --- | --- |
 | TL-001 | D1-D4 e build minimale di Fase 0 | attiva, **D2 superata da TL-002** |
 | TL-002 | Pin su Claude Fable 5 · soglie di regressione | attiva |
+| TL-003 | Stagione 0 autorizzata | attiva |
 
 ---
 
@@ -169,3 +170,14 @@ di wallet.
   da fissare **prima** della raccolta della baseline).
 - La gamba meccanica del confronto appaiato.
 - La data di avvio della Stagione 0.
+
+---
+
+## TL-003 — Stagione 0 autorizzata
+
+- **Data**: 13/08/2026
+- **Decisione**: l'owner autorizza l'avvio della Stagione 0 con la firma
+  esplicita "Stagione 0: via" (PREREG_LAB_S0 §8, commit 9ef5681, manifest
+  timbrato OTS in b1ee4d8); primo giorno atteso: 14/08/2026 00:00 UTC via
+  task schedulato collaudato (exit 0x2 alla prova di cablaggio).
+- **Decisa da**: l'owner.
