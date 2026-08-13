@@ -465,6 +465,21 @@ def test_freeze_id_cambia_col_modello():
     assert a.freeze_id != b.freeze_id
 
 
+def test_caching_policy_ha_un_default_vuoto():
+    """Un manifest pre-RITO CACHING (nessun caching dichiarato) resta valido."""
+    manifest = make_manifest()
+    assert manifest.caching_policy == ""
+
+
+def test_freeze_id_cambia_con_la_caching_policy():
+    """Come sampling_policy e thinking_policy: cambiare come viene fatta la
+    chiamata apre un nuovo segmento di track record, anche se il modello e i
+    context file restano gli stessi."""
+    a = make_manifest()
+    b = a.model_copy(update={"caching_policy": "cache_control su system e tool"})
+    assert a.freeze_id != b.freeze_id
+
+
 def test_freeze_id_ignora_lo_stato_ots():
     a = make_manifest()
     b = a.model_copy(update={"ots_pending": False, "ots_proof_path": "p.ots"})

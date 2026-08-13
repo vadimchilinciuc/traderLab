@@ -1,7 +1,8 @@
 {
-  "freeze_id": "f8cadb39414a64d0e7cd5f54e3412644aad92d7fa5dfbba0a243113cb98da26b",
+  "freeze_id": "f37b8c2c98351ed93f1a841d6b6e58faba2d1023e5883b3c8ff6da3ba37535e1",
   "freeze_manifest": {
-    "context_git_sha": "9172b29",
+    "caching_policy": "cache_control ephemeral su tre blocchi: (1) il system prompt, blocco unico, identico a ogni chiamata di ogni replica di ogni asset (D1); (2) l'ultima definizione di tool nell'elenco, che chiude il prefisso cacheabile di tutte le definizioni, anch'esse identiche a ogni chiamata; (3) l'ultimo tool_result della conversazione corrente (tipicamente il dossier dell'asset), che resta stabile da un turno al successivo negli scambi con più di due turni.",
+    "context_git_sha": "1a12fb0",
     "manifest_version": 1,
     "max_tokens": 8000,
     "model_string": "claude-fable-5",
@@ -9,7 +10,7 @@
     "ots_pending": true,
     "ots_proof_path": null,
     "persona_sha": "d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3",
-    "pinned_at_utc": "2026-08-13T16:09:46.035632Z",
+    "pinned_at_utc": "2026-08-13T16:25:58.244705Z",
     "sampling_policy": "api_default_omitted",
     "system_prompt_sha": "7ccf9dc4fcecdd72dc122d522a73a97697b4d15ad9d9d8b33a9c2bdbfb6d4177",
     "temperature": null,

@@ -49,6 +49,20 @@ DEFAULT_MODEL_NOTE = (
 # mai un verbale parziale silenzioso.
 DEFAULT_MAX_TOKENS = 8_000
 DEFAULT_MAX_TOOL_ITERATIONS = 10
+
+# RITO CACHING: descrizione dei blocchi marcati `cache_control: ephemeral`
+# in `arena/llm_client.py` (`_cached_system`, `_cached_tools`,
+# `_cached_messages`). Solo costo e latenza — vedi il docstring di
+# `FreezeManifest.caching_policy`.
+DEFAULT_CACHING_POLICY = (
+    "cache_control ephemeral su tre blocchi: (1) il system prompt, blocco "
+    "unico, identico a ogni chiamata di ogni replica di ogni asset (D1); "
+    "(2) l'ultima definizione di tool nell'elenco, che chiude il prefisso "
+    "cacheabile di tutte le definizioni, anch'esse identiche a ogni "
+    "chiamata; (3) l'ultimo tool_result della conversazione corrente "
+    "(tipicamente il dossier dell'asset), che resta stabile da un turno al "
+    "successivo negli scambi con più di due turni."
+)
 # Fable e' il modello piu' caro del listino: il tetto di chiamate non e' una
 # formalita'.
 DEFAULT_MAX_LLM_CALLS_PER_DAY = 200
@@ -164,6 +178,7 @@ def build_freeze_manifest(
     model_string: str = DEFAULT_MODEL_STRING,
     model_note: str = DEFAULT_MODEL_NOTE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    caching_policy: str = DEFAULT_CACHING_POLICY,
     agent_dir: Path = AGENT_DIR,
     context_git_sha: str | None = None,
 ) -> FreezeManifest:
@@ -193,5 +208,6 @@ def build_freeze_manifest(
         persona_sha=context.persona_sha,
         tool_schemas_sha=all_tool_schemas_sha(),
         context_git_sha=context_git_sha or current_git_sha(),
+        caching_policy=caching_policy,
         ots_pending=True,
     )

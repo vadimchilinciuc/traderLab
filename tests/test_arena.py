@@ -50,11 +50,19 @@ def wired(tmp_path):
 
 
 class _FakeUsage:
-    """Imita `anthropic.types.Usage`: solo i due campi che il client legge."""
+    """Imita `anthropic.types.Usage`: solo i campi che il client legge."""
 
-    def __init__(self, input_tokens, output_tokens):
+    def __init__(
+        self,
+        input_tokens,
+        output_tokens,
+        cache_creation_input_tokens=None,
+        cache_read_input_tokens=None,
+    ):
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.cache_read_input_tokens = cache_read_input_tokens
 
 
 class _FakeResponse:
@@ -257,7 +265,12 @@ def test_usage_reale_finisce_nel_tool_log_accanto_ai_tentativi(wired):
                 ],
                 stop_reason="tool_use",
                 model=DEFAULT_MODEL_STRING,
-                usage=LLMUsage(input_tokens=340, output_tokens=58),
+                usage=LLMUsage(
+                    input_tokens=340,
+                    output_tokens=58,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=300,
+                ),
             )
 
     runner = DailyRunner(
@@ -276,6 +289,14 @@ def test_usage_reale_finisce_nel_tool_log_accanto_ai_tentativi(wired):
     submit_calls = [e for e in llm_entries if e["meta"]["input_tokens"] == 340]
     assert dossier_calls and all(e["meta"]["output_tokens"] == 15 for e in dossier_calls)
     assert submit_calls and all(e["meta"]["output_tokens"] == 58 for e in submit_calls)
+    # PASSO 0: nessun usage di cache dichiarato per il turno dossier -> null,
+    # non zero.
+    assert all(e["meta"]["cache_creation_input_tokens"] is None for e in dossier_calls)
+    assert all(e["meta"]["cache_read_input_tokens"] is None for e in dossier_calls)
+    # RITO CACHING: il turno submit dichiara una lettura di cache -> arriva
+    # nel tool log accanto agli altri token.
+    assert all(e["meta"]["cache_creation_input_tokens"] == 0 for e in submit_calls)
+    assert all(e["meta"]["cache_read_input_tokens"] == 300 for e in submit_calls)
 
 
 def _asset_from(messages):
@@ -890,6 +911,134 @@ def test_usage_assente_diventa_none_non_zero():
     )
     response = client.complete(system="s", messages=[], tools=[])
     assert response.usage is None
+
+
+def test_i_token_di_cache_finiscono_nella_risposta():
+    """RITO CACHING: cache_creation/cache_read arrivano accanto a input/output."""
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest,
+        client=_fake_streaming_client(
+            _FakeResponse(
+                usage=_FakeUsage(
+                    input_tokens=900,
+                    output_tokens=40,
+                    cache_creation_input_tokens=800,
+                    cache_read_input_tokens=0,
+                )
+            )
+        ),
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.usage == LLMUsage(
+        input_tokens=900,
+        output_tokens=40,
+        cache_creation_input_tokens=800,
+        cache_read_input_tokens=0,
+    )
+
+
+def test_i_token_di_cache_assenti_restano_none():
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest,
+        client=_fake_streaming_client(
+            _FakeResponse(usage=_FakeUsage(input_tokens=10, output_tokens=5))
+        ),
+    )
+    response = client.complete(system="s", messages=[], tools=[])
+    assert response.usage.cache_creation_input_tokens is None
+    assert response.usage.cache_read_input_tokens is None
+
+
+# --------------------------------------------------------------------------
+# RITO CACHING: marcatori cache_control sui blocchi giusti della richiesta
+# --------------------------------------------------------------------------
+
+
+def test_cache_control_sul_system_e_sull_ultimo_tool():
+    """System e tool sono identici a ogni chiamata (D1): marcati sempre."""
+    catturato = {}
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=_fake_streaming_client(recorder=catturato)
+    )
+    tools = [{"name": "get_universe"}, {"name": "get_asset_dossier"}]
+    client.complete(
+        system="persona e istruzioni",
+        messages=[{"role": "user", "content": "x"}],
+        tools=tools,
+    )
+
+    assert catturato["system"] == [
+        {
+            "type": "text",
+            "text": "persona e istruzioni",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    assert "cache_control" not in catturato["tools"][0]
+    assert catturato["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    # Gli originali passati dal chiamante non vengono mutati.
+    assert "cache_control" not in tools[-1]
+
+
+def test_cache_control_assente_sui_messaggi_al_primo_turno():
+    """Al primo turno non c'e' ancora un tool_result da marcare."""
+    catturato = {}
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=_fake_streaming_client(recorder=catturato)
+    )
+    messages = [{"role": "user", "content": "ASSET: BTC"}]
+    client.complete(system="s", messages=messages, tools=[])
+
+    assert catturato["messages"] == messages
+    assert messages[0]["content"] == "ASSET: BTC"  # invariato
+
+
+def test_cache_control_sull_ultimo_tool_result_quando_presente():
+    """Il dossier letto al turno precedente: prefisso stabile da riusare."""
+    catturato = {}
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=_fake_streaming_client(recorder=catturato)
+    )
+    messages = [
+        {"role": "user", "content": "ASSET: BTC"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "name": "get_asset_dossier", "id": "t1"}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": '{"features": {}}'}
+            ],
+        },
+    ]
+    client.complete(system="s", messages=messages, tools=[])
+
+    ultimo = catturato["messages"][-1]
+    assert ultimo["content"][0]["cache_control"] == {"type": "ephemeral"}
+    # Il messaggio originale del chiamante (il runner) non viene mutato: la
+    # sua lista serve intatta per costruire il turno successivo.
+    assert "cache_control" not in messages[-1]["content"][0]
+
+
+def test_cache_control_ignora_un_ultimo_messaggio_senza_tool_result():
+    """Un ultimo messaggio 'assistant' non e' un punto di cache valido."""
+    catturato = {}
+    manifest = build_freeze_manifest(ASOF, context_git_sha="abcdef1")
+    client = AnthropicTraderClient(
+        manifest, client=_fake_streaming_client(recorder=catturato)
+    )
+    messages = [
+        {"role": "user", "content": "ASSET: BTC"},
+        {"role": "assistant", "content": [{"type": "text", "text": "..."}]},
+    ]
+    client.complete(system="s", messages=messages, tools=[])
+    assert catturato["messages"] == messages
 
 
 def test_un_400_non_viene_ritentato():

@@ -80,10 +80,18 @@ class LLMUsage:
     non serve sommare gli eventi a mano. Se un campo manca davvero dal
     payload resta `None` — mai `0`, che qui significherebbe "zero token" e
     non "non registrato".
+
+    `cache_creation_input_tokens` e `cache_read_input_tokens` esistono solo
+    da quando il client marca i blocchi ripetuti con `cache_control`
+    (RITO CACHING): il primo conta i token scritti in cache a una chiamata
+    che non trova un prefisso già cacheato, il secondo quelli letti dalla
+    cache invece che rielaborati.
     """
 
     input_tokens: int | None
     output_tokens: int | None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +167,62 @@ class CallBudget:
     @property
     def remaining(self) -> int:
         return max(0, self.max_calls - self.used)
+
+
+# --------------------------------------------------------------------------
+# Prompt caching (RITO CACHING): solo costo e latenza, nessun cambio di
+# comportamento del modello. I blocchi marcati sono quelli che restano
+# byte-identici da una chiamata alla successiva: il system prompt e le
+# definizioni dei tool (identici per ogni replica di ogni asset del giorno,
+# D1), e l'ultimo `tool_result` della conversazione corrente (tipicamente il
+# dossier dell'asset), che resta stabile da un turno al successivo negli
+# scambi con piu' di due turni.
+# --------------------------------------------------------------------------
+
+CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+
+
+def _cached_system(system: str) -> list[dict[str, Any]]:
+    """Il `system` come blocco unico con marcatore di cache in coda.
+
+    L'API accetta `system` come stringa o come lista di blocchi di testo;
+    solo la seconda forma ammette `cache_control`.
+    """
+    return [{"type": "text", "text": system, "cache_control": dict(CACHE_CONTROL_EPHEMERAL)}]
+
+
+def _cached_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Marcatore sull'ultima definizione: chiude il prefisso cacheabile che
+    contiene tutte le definizioni dei tool, identiche a ogni chiamata."""
+    if not tools:
+        return tools
+    cached = [dict(t) for t in tools]
+    cached[-1] = {**cached[-1], "cache_control": dict(CACHE_CONTROL_EPHEMERAL)}
+    return cached
+
+
+def _cached_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Marcatore sull'ultimo blocco `tool_result` dell'ultimo messaggio, se
+    presente. Al primo turno di una conversazione non c'e' ancora nessun
+    `tool_result` (il messaggio e' solo testo utente): la funzione lascia i
+    messaggi invariati. Non muta l'argomento ricevuto: il chiamante (il
+    runner) riusa la propria lista di messaggi per il turno successivo.
+    """
+    if not messages:
+        return messages
+    last = messages[-1]
+    content = last.get("content") if isinstance(last, dict) else None
+    if last.get("role") != "user" or not isinstance(content, list):
+        return messages
+    idx = None
+    for i, block in enumerate(content):
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            idx = i
+    if idx is None:
+        return messages
+    new_content = list(content)
+    new_content[idx] = {**new_content[idx], "cache_control": dict(CACHE_CONTROL_EPHEMERAL)}
+    return [*messages[:-1], {**last, "content": new_content}]
 
 
 # --------------------------------------------------------------------------
@@ -247,12 +311,20 @@ class AnthropicTraderClient:
         # NOTA D4: nessun temperature / top_p / top_k. Nessun `thinking`.
         # Nessun `fallbacks`. Ogni omissione qui e' una policy, non una
         # dimenticanza: vedi il docstring della classe.
+        #
+        # Prompt caching (solo costo/latenza, nessun cambio di comportamento
+        # del modello): system prompt e definizioni dei tool sono identici a
+        # ogni chiamata di ogni replica di ogni asset (D1); l'ultimo
+        # tool_result della conversazione (tipicamente il dossier
+        # dell'asset) resta stabile da un turno al successivo negli scambi
+        # con piu' di due turni. Vedi `_cached_system`/`_cached_tools`/
+        # `_cached_messages`.
         payload = {
             "model": self._manifest.model_string,
             "max_tokens": self._manifest.max_tokens,
-            "system": system,
-            "messages": messages,
-            "tools": tools,
+            "system": _cached_system(system),
+            "messages": _cached_messages(messages),
+            "tools": _cached_tools(tools),
         }
         started = time.monotonic()
         attempt_errors: list[str | None] = []
@@ -330,6 +402,8 @@ def _extract_usage(response: Any) -> LLMUsage | None:
     return LLMUsage(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
+        cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
+        cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
     )
 
 

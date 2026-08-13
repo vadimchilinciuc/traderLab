@@ -64,6 +64,15 @@ class FreezeManifest(FrozenModel):
     tool_schemas_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
     context_git_sha: str = Field(pattern=r"^[0-9a-f]{7,40}$")
 
+    # --- Caching (RITO CACHING) ---
+    # Descrizione dei blocchi marcati con `cache_control`. Solo costo e
+    # latenza: non cambia cosa il Trader vede né cosa decide, quindi non
+    # tocca system_prompt_sha/persona_sha/tool_schemas_sha. Registrato qui
+    # perché un cambio nella strategia di caching è comunque un cambio di
+    # come la chiamata viene fatta, alla pari di sampling_policy e
+    # thinking_policy: cambiarla apre un nuovo freeze_id.
+    caching_policy: str = Field(default="", max_length=1000)
+
     # --- Timestamping ---
     ots_pending: bool = True
     ots_proof_path: str | None = None

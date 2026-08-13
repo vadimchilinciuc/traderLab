@@ -346,6 +346,16 @@ class DailyRunner:
                     "output_tokens": (
                         response.usage.output_tokens if response.usage else None
                     ),
+                    "cache_creation_input_tokens": (
+                        response.usage.cache_creation_input_tokens
+                        if response.usage
+                        else None
+                    ),
+                    "cache_read_input_tokens": (
+                        response.usage.cache_read_input_tokens
+                        if response.usage
+                        else None
+                    ),
                 },
             )
             # Rifiuto dei classificatori: HTTP 200 con content vuoto o parziale.

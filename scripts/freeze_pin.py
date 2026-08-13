@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arena.config import (
+    DEFAULT_CACHING_POLICY,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL_STRING,
     DEFAULT_REPLICA_IDS,
@@ -57,6 +58,7 @@ def build_pin_document(*, out: Path) -> dict:
         datetime.now(tz=timezone.utc),
         model_string=DEFAULT_MODEL_STRING,
         max_tokens=DEFAULT_MAX_TOKENS,
+        caching_policy=DEFAULT_CACHING_POLICY,
         context_git_sha=current_git_sha(),
     )
     return {

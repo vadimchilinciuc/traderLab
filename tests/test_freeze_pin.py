@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 
+from arena.config import DEFAULT_CACHING_POLICY
 from contracts.freeze import FreezeManifest, SamplingPolicy, ThinkingPolicy
 from scripts.freeze_pin import PREREG_REF, build_pin_document
 
@@ -22,6 +23,7 @@ def test_il_documento_di_pin_e_completo(tmp_path):
     assert manifest.sampling_policy is SamplingPolicy.API_DEFAULT_OMITTED
     assert manifest.thinking_policy is ThinkingPolicy.API_DEFAULT
     assert manifest.max_tokens == 8_000
+    assert manifest.caching_policy == DEFAULT_CACHING_POLICY
     assert manifest.ots_pending is True
     assert manifest.ots_proof_path is None
     assert manifest.freeze_id == document["freeze_id"]
