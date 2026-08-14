@@ -118,7 +118,13 @@ di un commit.
    sull'account e sulle condizioni).
 2. **General**
    - Nome: `traderLab — rito quotidiano`.
-   - *Run whether user is logged on or not*.
+   - ~~*Run whether user is logged on or not*~~ → **corretto**: usare invece
+     ***Run only when user is logged on***. Le variabili d'ambiente
+     **utente** richieste da `-Live` (vedi sotto) vivono nel profilo
+     dell'utente e servono una sessione attiva per essere lette in modo
+     affidabile — bastano Win+L (sessione bloccata, non chiusa), non basta il
+     logoff. Verificato sul task registrato: `LogonType=Interactive` (non
+     `S4U`), coerente con questo vincolo.
    - *Run with highest privileges*: **non** serve, lasciarlo spento.
 3. **Triggers** → New…
    - *Daily*, ricorrenza 1 giorno.
@@ -179,6 +185,15 @@ Il task **non** eredita la sessione interattiva. Due conseguenze pratiche:
 
 Dopo la registrazione, provare una volta con **Run** dal menù contestuale e
 leggere il log della giornata prima di considerare il task attivo.
+
+**Stato operativo (verificato il 14/08/2026).**
+
+- Variabili d'ambiente **utente** richieste: `ANTHROPIC_API_KEY` e
+  `TRADERLAB_ALLOW_LIVE_API=1` — il task **non legge `.env`** (vale anche fuori
+  da `-Live`, vedi sopra).
+- Vincolo "Esegui solo se l'utente è connesso" = **sessione attiva richiesta**:
+  Win+L (blocco schermo) va bene, il **logoff no** — il task è registrato con
+  `LogonType=Interactive` e non gira senza una sessione utente aperta.
 
 ---
 

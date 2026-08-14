@@ -20,3 +20,7 @@ data/logs/*
 !data/logs/.gitkeep
 
 .idea/
+
+# Report e prompt di lavoro generati a mano/da rito: non fanno parte del track record.
+*_REPORT.md
+PROMPT_*.md

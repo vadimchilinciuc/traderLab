@@ -119,17 +119,123 @@ La suite gira **senza rete e senza API key**.
 
 ---
 
+## Dopo Fase 0 — stato per milestone
+
+### Pre-Volo S0 ✅ (`3bc9a9c`)
+
+- Primo snapshot **reale** Hyperliquid collaudato (non più placeholder).
+- Universo promosso a **ufficiale**: BTC + ETH, perimetro P3 della campagna
+  carry, dal Pre-Screen C2 (`zeroPipes`). Chiude la voce 1 di "cosa manca"
+  sotto.
+- Tre difetti nel percorso del funding, trovati dal primo snapshot vero e
+  corretti: paginazione di `fundingHistory` (si fermava dopo ~20 giorni su
+  120 di lookback), `interval_hours` osservato dai dati invece che fissato a
+  8.0, `funding_rate_mean_7d` derivato da `interval_hours` invece di 21 punti
+  fissi.
+- Guardrail in codice (`CLAUDE.md` §2/§7): il builder rifiuta il funding più
+  vecchio di `max_funding_staleness_hours` (default **48h**,
+  `toolserver/config.py`) invece di servirlo.
+
+### Hardening ✅ (`1ff152a`, `67acd77`, `a820732`, `6c8998e`, `4a97522`, `e2205a4`, `9172b29`)
+
+- Retry sugli errori in-stream (`overloaded`/`rate_limit`), trovato dallo
+  smoke test.
+- Telemetria dei tentativi + retry a livello di rito, finestra di 45 minuti
+  (exit code 7 dedicato, vedi `docs/OPERATIONS.md` §3).
+- Soak: 7 giornate simulate end-to-end con `MockLLM` (zero rete), +2 fix
+  (telemetria cross-giornata, `run_id` disallineato dal tool log).
+- Rito quotidiano schedulabile + policy dei giorni mancati (`skipped_day`).
+- `max_tokens` alzato a 8000 (anti-shedding) + guardia sulla troncamento.
+- Fix dell'harness di smoke (sha reale, budget 16 — multi-turn osservato).
+
+### Pin ✅ (`1a12fb0`, `c2d2be6`)
+
+- Persona `trader_v0` promossa dalla bozza `trader_v0_proposta` (revisione
+  HR del 13/08/2026); manifest congelato: `pinned_at_utc =
+  2026-08-13T16:25:58Z`, `model_string = claude-fable-5`, `sampling_policy =
+  api_default_omitted`, `thinking_policy = api_default`, `max_tokens = 8000`
+  (`manifests/trader_v0_freeze_manifest.json`, `freeze_id`
+  `f37b8c2c98351e…`).
+- Prompt caching aggiunto pre-timbro: tre blocchi `cache_control: ephemeral`
+  (system prompt, ultima definizione di tool, ultimo `tool_result`).
+- `scripts/verify_pin.py` dichiara 4 controlli: model string risolta
+  sull'endpoint, nessuna variante datata più specifica, D4 (chiamata senza
+  sampling accettata / `temperature` esplicita rifiutata), `thinking:
+  disabled` rifiutato.
+- **Nota non ancora chiusa**: il campo `ots_pending` dentro il manifest legge
+  ancora `true` — non risulta aggiornato dopo il timbro OTS. I file
+  `.ots` (sotto) esistono e sono committati; una proof OTS "pending" in
+  attesa di conferma su Bitcoin è comportamento normale della libreria, ma
+  resta da eseguire l'`upgrade` e verificare che il campo nel manifest venga
+  aggiornato di conseguenza.
+
+### PREREG_LAB_S0 congelata ✅ (`9ef5681`) + OTS ✅ (`b1ee4d8`)
+
+- `docs/PREREG_LAB_S0.md` congelata il 13/08/2026, prima di ogni baseline.
+  §8 fissa il rito del pin come precondizione al primo giorno di S0.
+- Timbro OTS locale (`scripts/ots_stamp.py`, libreria `opentimestamps`
+  diretta — `otsclient` risultava rotto su questa macchina) prodotto per
+  `docs/PREREG_LAB_S0.md.ots` e `manifests/trader_v0_freeze_manifest.json.ots`.
+
+### Stagione 0 autorizzata — TL-003 ✅ (`1852dbe`)
+
+La firma dell'owner ("Stagione 0: via", PREREG_LAB_S0 §8) è **già a
+registro** in `DECISION_LOG.md` (voce TL-003, commit `1852dbe`); questa
+voce la referenzia, non la duplica.
+
+### Stato del primo giorno (verificato il 14/08/2026, pomeriggio)
+
+`data/logs/daily-2026-08-14.log` registra **due tentativi, entrambi fermati
+con exit 2** (precondizione non soddisfatta) — non una prova di cablaggio
+superata:
+
+1. `00:00:02Z` — STOP: `-Live richiede TRADERLAB_ALLOW_LIVE_API=1` (variabile
+   assente nell'ambiente in cui girava il task schedulato).
+2. `14:37:49Z` — STOP: guardia sull'ora UTC (passata lanciata a mano alle
+   14:37 invece delle 00:00 configurate — la guardia ha fatto il suo lavoro,
+   non è un difetto).
+
+Il task di Windows Task Scheduler (`traderLab — rito quotidiano`) risulta
+`Ready`, con `LastTaskResult = 2`: **nessuna passata a esito 0 è registrata
+finora**. `NextRunTime` = 15/08/2026 02:00 locale (CEST) = 15/08 00:00 UTC.
+
+Le variabili d'ambiente **utente** `TRADERLAB_ALLOW_LIVE_API=1` e
+`ANTHROPIC_API_KEY` risultano ora presenti sulla macchina (verificato
+direttamente). Restano da confermare **al prossimo passaggio schedulato**:
+il fallimento delle 00:00:02Z è compatibile con un task registrato *"Run
+whether user is logged on or not"* che non eredita variabili d'ambiente
+utente impostate fuori da una sessione interattiva — vedi la nota operativa
+in `docs/OPERATIONS.md` §4.
+
+**Correzione rispetto alla stima informale circolata**: il primo giorno con
+verbali non è confermato per il 15/08 in base a una "prova di cablaggio
+superata" — nessuna passata a esito 0 risulta nei log consultati. 15/08
+00:00 UTC è la data del prossimo slot schedulato; resta da verificare che
+quella passata vada a buon fine prima di trattare il giorno come acquisito.
+
+---
+
 ## Cosa manca per la Stagione 0
 
 Nessuna di queste voci è risolvibile dentro `traderLab`: sono precondizioni.
 
 | # | Manca | Chi/dove | Blocca |
 | --- | --- | --- | --- |
-| 1 | **Universo ufficiale dal Pre-Screen** | `zeroPipes` | L'universo attuale è `placeholder_non_ufficiale` ed è marcato tale dentro lo snapshot. Non si apre una stagione su un universo placeholder. |
-| 2 | **Gamba meccanica per il confronto appaiato** | da costruire | Senza di essa l'e-process non ha un secondo braccio: gira solo su dati sintetici. Il kill-criterion non è valutabile. |
-| 3 | **PREREG_LAB_S0** (documento a parte, futuro) | owner | Pre-registrazione di soglie, dimensioni campionarie e azioni conseguenti, timestampata **prima** dell'accumulo dati. |
-| 4 | **Pin effettivo del modello + OTS del FreezeManifest** | owner | `ots_pending=True` finché non c'è la proof. Eseguire prima `scripts/verify_pin.py`. |
-| 5 | **Data retention a 30 giorni sull'organizzazione** | owner | Precondizione di `claude-fable-5`: in zero-data-retention **ogni** chiamata risponde 400. |
+| # | Manca | Chi/dove | Blocca |
+| --- | --- | --- | --- |
+| 2 | **Gamba meccanica per il confronto appaiato** | da costruire | Senza di essa l'e-process non ha un secondo braccio: gira solo su dati sintetici. Il kill-criterion non è valutabile. Non blocca S0 (PREREG_LAB_S0 §1: S0 non misura skill), blocca il gate S0→S1 (PREREG_LAB_S0 §7). |
+
+~~1. Universo ufficiale dal Pre-Screen~~ → **chiusa dal Pre-Volo** (`3bc9a9c`): BTC + ETH, perimetro P3.
+
+~~3. PREREG_LAB_S0~~ → **chiusa**: congelata in `9ef5681`, timbrata OTS in `b1ee4d8`.
+
+~~4. Pin effettivo del modello + OTS del FreezeManifest~~ → **pin effettuato** (`1a12fb0`, manifest con
+`pinned_at_utc` valorizzato) e **proof OTS committata** (`b1ee4d8`); resta l'incongruenza aperta sul
+campo `ots_pending` del manifest, vedi nota "Pin" sopra.
+
+~~5. Data retention a 30 giorni sull'organizzazione~~ → implicitamente verificata dal pin riuscito
+(`verify_pin.py` richiede una chiamata live che fallirebbe con 400 in zero-data-retention); nessuna
+prova esplicita del contrario nei log consultati.
 
 ~~5. Soglie della suite di regressione~~ → **chiuse da TL-002** (vedi sotto).
 
