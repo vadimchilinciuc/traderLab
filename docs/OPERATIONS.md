@@ -290,3 +290,119 @@ oggi, il rito esce con 5 e non tocca nulla. Non è un errore da aggirare.
 - **Non registra sé stesso** nello scheduler.
 - **Non legge `.env`.** L'unica credenziale ammessa arriva dall'ambiente.
 - **Non recupera il passato**, in nessuna circostanza.
+
+---
+
+## 8. Controllo mattutino
+
+Un secondo task, indipendente dal rito quotidiano: gira ogni mattina alle
+08:00 ora locale e risponde a una domanda sola — *il rito di stanotte ha
+prodotto verbali?* — più, il lunedì, un tentativo silenzioso di far avanzare
+il timbro OTS dei file congelati. Non tocca il ledger, non decide nulla: è
+uno strumento di lettura e di controllo, non un secondo rito.
+
+### Cosa fa
+
+`scripts/morning_check.ps1` → `scripts/morning_check.py`
+(`arena`-style: il wrapper PowerShell è sottile, la logica sta nello script
+Python, per lo stesso motivo di `run_daily.ps1`). Due passi indipendenti:
+
+1. **Verifica la giornata di stanotte.** Cerca nel ledger dei verbali
+   (`data/ledger/season0.jsonl`) la giornata corrispondente a 00:00 UTC di
+   oggi.
+   - **Se c'è**: genera il rapporto del mattino (`scripts/morning_report.py`,
+     vedi sotto) e lo appende a `data/logs/morning-<data>.log`. Exit 0.
+   - **Se non c'è**: mostra un avviso **visibile** sullo schermo (`msg.exe`,
+     con fallback a un popup PowerShell se `msg.exe` non è disponibile) con
+     il testo `traderLab: il rito di stanotte NON ha prodotto verbali -
+     controlla data/logs/daily-<data>.log`, e scrive lo stesso allarme nel
+     log del controllo. Exit 1. Un avviso che non riesce a comparire (es.
+     nessuna sessione interattiva) è annotato nel log ma **non** fa fallire
+     il controllo per quello: l'exit code racconta la giornata, non il
+     popup.
+2. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
+   (`manifests/trader_v0_freeze_manifest.json`, `docs/PREREG_LAB_S0.md`) via
+   `scripts/ots_stamp.py upgrade`, con `TRADERLAB_ALLOW_NETWORK=1` iniettato
+   **solo** in quel sottoprocesso — stessa disciplina di rete del passo dello
+   snapshot nel rito quotidiano (`CLAUDE.md` §7). Non è mai bloccante: se i
+   calendar non rispondono o l'attestazione resta pending, l'esito finisce
+   nel log e il controllo prosegue comunque. Fuori dal lunedì questo passo
+   non parte.
+
+`scripts/morning_report.py` (invocabile anche da solo, `uv run python
+scripts/morning_report.py`) stampa un rapporto sintetico dell'ultima
+giornata toccata dal rito: data, esito (`completata` / `skipped_day` /
+`failed_decisions` / `nessuna`), per ogni asset le decisioni delle tre
+repliche con confidence e l'accordo tra loro (`3/3`, `2/3`, `1/3`), i token
+del giorno (input, output, letti e scritti in cache) con il costo stimato in
+USD sul listino di `claude-fable-5` (costanti commentate in cima al file,
+marcate `DA AGGIORNARE` — non seguono automaticamente il listino reale),
+l'esito di `verify()` sulla catena del ledger, e il conteggio delle giornate
+registrate sulla finestra del kill-criterion pre-registrato
+(`ledger/eprocess.py`, `window=20`). Gestisce con grazia il caso in cui non
+esista ancora nessuna giornata.
+
+### Come leggerlo
+
+Un file per giornata di controllo, sotto `data/logs/`, con la data **UTC**
+nel nome:
+
+```
+data/logs/morning-2026-08-17.log
+```
+
+Stesse convenzioni del log del rito quotidiano (§5): timestamp UTC su ogni
+riga, marcatore `[wrapper]` per le righe del guscio PowerShell, il rapporto
+del mattino in un blocco indentato (`--- rapporto del mattino ---`). Cosa
+cercare, in ordine:
+
+| Riga | Significato |
+| ---- | ----------- |
+| `STOP: …` | La giornata di stanotte manca; segue il testo dell'avviso mostrato. |
+| `--- rapporto del mattino ---` | La giornata c'è: il rapporto sintetico segue, indentato. |
+| `upgrade OTS …` | Solo il lunedì: esito del tentativo di upgrade per ciascuno dei due file. |
+
+Exit code: `0` giornata presente, rapporto scritto; `1` giornata assente,
+avviso mostrato; `2` precondizione della macchina non soddisfatta (`uv`
+fuori dal PATH del task) — lo stesso significato dell'exit code 2 del rito
+quotidiano, non del passo 1.
+
+### Registrare il task in Windows Task Scheduler
+
+**Lo fa l'owner, a mano**, come per il rito quotidiano (§4): nessuno script
+del repo registra un task. Riga di comando equivalente, da eseguire una
+volta sola con il percorso reale del repo:
+
+```powershell
+$repo = "C:\percorso\traderLab"
+$azione = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$repo\scripts\morning_check.ps1`"" `
+    -WorkingDirectory $repo
+$trigger = New-ScheduledTaskTrigger -Daily -At "08:00"
+$impostazioni = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
+    -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
+Register-ScheduledTask -TaskName "traderLab — controllo mattutino" `
+    -Action $azione -Trigger $trigger -Settings $impostazioni
+```
+
+Note che valgono quanto per il rito quotidiano (§4):
+
+- *Run only when user is logged on* — l'avviso visibile (`msg.exe` o il
+  popup PowerShell) richiede una sessione interattiva per poter comparire; e
+  `uv` deve stare nel PATH dell'account con cui gira il task.
+- L'ora del trigger è **ora locale**, non UTC: a differenza del rito
+  quotidiano, il controllo delle 08:00 non ha un vincolo strutturale
+  sull'ora — è un promemoria per l'owner, non una decisione point-in-time —
+  quindi non c'è una guardia che lo ferma se l'orario slitta con il cambio
+  ora legale. Ricontrollarlo comunque due volte l'anno tiene "le 08:00" un
+  orario sensato per aprire il laptop e leggere il log.
+
+### Cosa non fa
+
+- **Non decide nulla e non scrive nel ledger.** Legge soltanto.
+- **Non recupera una giornata saltata.** Se il rito di stanotte non è
+  partito, il controllo lo segnala; il recupero non esiste, per lo stesso
+  motivo del §6.
+- **Non effettua il pin OTS.** L'upgrade del lunedì fa avanzare un timbro
+  già esistente da pending a confermato — non crea un nuovo timbro e non
+  tocca il pin del modello.
