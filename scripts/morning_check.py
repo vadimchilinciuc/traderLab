@@ -5,7 +5,7 @@ per lo stesso motivo di `scripts/run_daily.ps1` / `arena/daily_ritual.py`: uno
 script di shell non è testabile senza scheduler, e una regola non testata non
 esiste per il Lab. Tutta la logica sta qui.
 
-Il controllo fa due cose, indipendenti tra loro:
+Il controllo fa tre cose, indipendenti tra loro:
 
 1. **Verifica la giornata di stanotte.** Se il ledger dei verbali contiene la
    giornata corrispondente a 00:00 UTC di oggi, genera il rapporto del
@@ -13,7 +13,15 @@ Il controllo fa due cose, indipendenti tra loro:
    `data/logs/morning-<data>.log`, exit 0. Se non la contiene, mostra un
    avviso **visibile** all'utente (`msg.exe`, con fallback a un popup
    PowerShell) e scrive l'allarme nello stesso log, exit 1.
-2. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
+2. **Esegue il preflight di stanotte** (`scripts/preflight.py`), sempre,
+   indipendentemente dall'esito del punto 1: verifica di giorno le
+   precondizioni della PROSSIMA passata del rito e appende la tabella al log
+   del mattino. Se il preflight dice NO, mostra un secondo avviso
+   **visibile**, distinto da quello del punto 1 ("stanotte NON partirà:
+   causa"). Questo passo legge soltanto: non tocca né il ledger né gli exit
+   code dichiarati in `EXIT_MEANING`, che restano determinati solo dalla
+   giornata di stanotte (punto 1).
+3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
    (`manifests/trader_v0_freeze_manifest.json`,
    `docs/PREREG_LAB_S0.md`) tramite `scripts/ots_stamp.py upgrade`, iniettando
    `TRADERLAB_ALLOW_NETWORK=1` **solo** nel processo dell'upgrade — stessa
@@ -40,6 +48,7 @@ from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH, RitualLog
 from ledger.ops_ledger import OpsLedger, recorded_days
 from ledger.trader_ledger import TraderLedger
 from scripts.morning_report import generate_report
+from scripts.preflight import PreflightResult, format_table, run_preflight
 from toolserver.config import ToolServerConfig
 
 EXIT_OK = 0
@@ -104,6 +113,11 @@ def default_alert(message: str, *, runner=subprocess.run) -> bool:
         return False
 
 
+def default_preflight_check(*, repo_root: Path, env: dict[str, str], ledger_path: Path, ops_path: Path) -> PreflightResult:
+    """Wrapper reale su `scripts.preflight.run_preflight` (sottoprocessi veri)."""
+    return run_preflight(repo_root=repo_root, env=env, ledger_path=ledger_path, ops_path=ops_path)
+
+
 @dataclass(frozen=True, slots=True)
 class MorningCheckResult:
     exit_code: int
@@ -112,6 +126,8 @@ class MorningCheckResult:
     alert_shown: bool | None = None
     ots_attempted: bool = False
     detail: str = ""
+    preflight_ready: bool | None = None
+    preflight_alert_shown: bool | None = None
 
     @property
     def meaning(self) -> str:
@@ -132,6 +148,7 @@ def run_morning_check(
     runner=subprocess_runner,
     env: dict[str, str] | None = None,
     alert=default_alert,
+    preflight=default_preflight_check,
     echo: bool = True,
 ) -> MorningCheckResult:
     """Esegue il controllo del mattino e ritorna l'esito. Non solleva."""
@@ -172,6 +189,33 @@ def run_morning_check(
         exit_code = EXIT_NO_VERBALI
         detail = message
 
+    preflight_ready: bool | None = None
+    preflight_alert_shown: bool | None = None
+    try:
+        preflight_result = preflight(
+            repo_root=repo_root, env=environment, ledger_path=ledger_path, ops_path=ops_path
+        )
+    except Exception as exc:  # noqa: BLE001 - un preflight fallito non blocca il controllo
+        log.write(f"preflight: eccezione nell'eseguirlo — {type(exc).__name__}: {exc}")
+    else:
+        log.block("preflight per stanotte", format_table(preflight_result))
+        preflight_ready = preflight_result.ready
+        if not preflight_result.ready:
+            preflight_message = f"traderLab: stanotte NON partira' - {preflight_result.blocking_detail}"
+            log.write(f"STOP: {preflight_message}")
+            try:
+                preflight_alert_shown = bool(alert(preflight_message))
+            except Exception as exc:  # noqa: BLE001 - un avviso fallito non blocca il controllo
+                log.write(f"avviso preflight: eccezione nel mostrarlo — {type(exc).__name__}: {exc}")
+                preflight_alert_shown = False
+            log.write(
+                "avviso preflight mostrato"
+                if preflight_alert_shown
+                else "avviso preflight NON mostrato (msg.exe e popup falliti)"
+            )
+        else:
+            log.write("preflight: pronto per stanotte")
+
     is_monday = today.weekday() == 0 if is_monday is None else is_monday
     ots_attempted = False
     if is_monday:
@@ -195,6 +239,8 @@ def run_morning_check(
         alert_shown=alert_shown,
         ots_attempted=ots_attempted,
         detail=detail,
+        preflight_ready=preflight_ready,
+        preflight_alert_shown=preflight_alert_shown,
     )
 
 

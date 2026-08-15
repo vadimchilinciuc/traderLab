@@ -296,20 +296,21 @@ oggi, il rito esce con 5 e non tocca nulla. Non è un errore da aggirare.
 ## 8. Controllo mattutino
 
 Un secondo task, indipendente dal rito quotidiano: gira ogni mattina alle
-08:00 ora locale e risponde a una domanda sola — *il rito di stanotte ha
-prodotto verbali?* — più, il lunedì, un tentativo silenzioso di far avanzare
-il timbro OTS dei file congelati. Non tocca il ledger, non decide nulla: è
-uno strumento di lettura e di controllo, non un secondo rito.
+08:00 ora locale e risponde a due domande — *il rito di stanotte ha prodotto
+verbali?* e *il rito di STANOTTE (quella che deve ancora partire) troverà le
+sue precondizioni soddisfatte?* — più, il lunedì, un tentativo silenzioso di
+far avanzare il timbro OTS dei file congelati. Non tocca il ledger, non
+decide nulla: è uno strumento di lettura e di controllo, non un secondo rito.
 
 ### Cosa fa
 
 `scripts/morning_check.ps1` → `scripts/morning_check.py`
 (`arena`-style: il wrapper PowerShell è sottile, la logica sta nello script
-Python, per lo stesso motivo di `run_daily.ps1`). Due passi indipendenti:
+Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
 
-1. **Verifica la giornata di stanotte.** Cerca nel ledger dei verbali
-   (`data/ledger/season0.jsonl`) la giornata corrispondente a 00:00 UTC di
-   oggi.
+1. **Verifica la giornata di stanotte** (quella appena passata). Cerca nel
+   ledger dei verbali (`data/ledger/season0.jsonl`) la giornata corrispondente
+   a 00:00 UTC di oggi.
    - **Se c'è**: genera il rapporto del mattino (`scripts/morning_report.py`,
      vedi sotto) e lo appende a `data/logs/morning-<data>.log`. Exit 0.
    - **Se non c'è**: mostra un avviso **visibile** sullo schermo (`msg.exe`,
@@ -320,7 +321,14 @@ Python, per lo stesso motivo di `run_daily.ps1`). Due passi indipendenti:
      nessuna sessione interattiva) è annotato nel log ma **non** fa fallire
      il controllo per quello: l'exit code racconta la giornata, non il
      popup.
-2. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
+2. **Esegue il preflight della PROSSIMA passata** (`scripts/preflight.py`,
+   vedi sotto), sempre, indipendentemente dall'esito del passo 1 — sono due
+   notti diverse, ieri notte e stanotte. La tabella finisce nel log del
+   mattino (blocco `--- preflight per stanotte ---`). Se il preflight dice
+   NO, mostra un **secondo** avviso visibile, distinto da quello del passo 1:
+   `traderLab: stanotte NON partira' - <prima causa>`. Non tocca l'exit code
+   del controllo, che resta determinato solo dal passo 1.
+3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
    (`manifests/trader_v0_freeze_manifest.json`, `docs/PREREG_LAB_S0.md`) via
    `scripts/ots_stamp.py upgrade`, con `TRADERLAB_ALLOW_NETWORK=1` iniettato
    **solo** in quel sottoprocesso — stessa disciplina di rete del passo dello
@@ -328,6 +336,27 @@ Python, per lo stesso motivo di `run_daily.ps1`). Due passi indipendenti:
    calendar non rispondono o l'attestazione resta pending, l'esito finisce
    nel log e il controllo prosegue comunque. Fuori dal lunedì questo passo
    non parte.
+
+### `scripts/preflight.py`
+
+Verifica **di giorno** le otto precondizioni della passata di **stanotte**,
+nato da due notti di Stagione 0 perse per precondizioni scoperte solo a
+mezzanotte. Stampa una tabella PASS/FAIL/PROMEMORIA e la riga finale `PRONTO
+PER STANOTTE: SI` o `NO — <prima causa>`. Invocabile anche da solo:
+
+```powershell
+uv run python scripts/preflight.py
+```
+
+Punto rilevante: **il rito non legge mai `.env`** (§4, §7 sopra). Il
+preflight legge `.env` solo in via diagnostica, per segnalare un
+disallineamento con l'ambiente di processo — mai come fonte reale della
+risoluzione di `-Live`, che replica esattamente quella di `run_daily.ps1`
+(Arguments del task registrato, poi ambiente di processo). Il passo (c),
+rete verso Hyperliquid, gira in un sottoprocesso separato con
+`TRADERLAB_ALLOW_NETWORK=1` iniettato solo lì, mai nel processo del
+preflight — stessa disciplina di `CLAUDE.md` §7. Exit code: `0` se pronto,
+`1` altrimenti.
 
 `scripts/morning_report.py` (invocabile anche da solo, `uv run python
 scripts/morning_report.py`) stampa un rapporto sintetico dell'ultima

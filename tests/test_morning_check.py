@@ -27,6 +27,7 @@ from scripts.morning_check import (
     log_path_for,
     run_morning_check,
 )
+from scripts.preflight import CheckResult, PreflightResult
 from tests.factories import make_decision
 
 OGGI = date(2026, 8, 17)  # un lunedi'
@@ -102,6 +103,14 @@ def _scrivi_giornata(ledger: TraderLedger, giorno: date) -> None:
         )
 
 
+def _preflight_pronto(**kwargs):
+    """Finto preflight sempre pronto: non e' quello che questo file testa."""
+    return PreflightResult(
+        checks=(CheckResult("(a) finto", True, "sempre pronto nei test"),),
+        ready=True,
+    )
+
+
 def _controllo(percorsi, **kwargs):
     parametri = {
         "repo_root": percorsi["repo_root"],
@@ -114,6 +123,7 @@ def _controllo(percorsi, **kwargs):
         "is_monday": False,
         "runner": FakeRunner(),
         "alert": FakeAlert(),
+        "preflight": _preflight_pronto,
         "env": {},
         "echo": False,
     }
@@ -205,6 +215,81 @@ def test_avviso_fallito_non_blocca_il_controllo(percorsi):
     assert esito.alert_shown is False
     testo = esito.log_path.read_text(encoding="utf-8")
     assert "avviso NON mostrato" in testo or "eccezione" in testo
+
+
+# --------------------------------------------------------------------------
+# Preflight di stanotte: sempre eseguito, mai bloccante per l'exit code
+# --------------------------------------------------------------------------
+
+
+def _preflight_bloccato(**kwargs):
+    return PreflightResult(
+        checks=(CheckResult("(b) flag -Live", False, "TRADERLAB_ALLOW_LIVE_API assente"),),
+        ready=False,
+        blocking_detail="(b) flag -Live: TRADERLAB_ALLOW_LIVE_API assente",
+    )
+
+
+def test_preflight_gira_sempre_e_finisce_nel_log_anche_a_giornata_trovata(percorsi):
+    ledger = TraderLedger(percorsi["ledger_path"])
+    _scrivi_giornata(ledger, OGGI)
+    allarme = FakeAlert()
+
+    esito = _controllo(percorsi, alert=allarme)
+
+    assert esito.exit_code == EXIT_OK  # l'esito della giornata non cambia
+    assert esito.preflight_ready is True
+    assert allarme.messages == []  # preflight pronto: nessun avviso in piu'
+    testo = esito.log_path.read_text(encoding="utf-8")
+    assert "preflight per stanotte" in testo
+
+
+def test_preflight_non_pronto_mostra_un_secondo_avviso_distinto(percorsi):
+    """Il preflight parla di STANOTTE, l'avviso della giornata parla di IERI NOTTE."""
+    ledger = TraderLedger(percorsi["ledger_path"])
+    _scrivi_giornata(ledger, OGGI)
+    allarme = FakeAlert()
+
+    esito = _controllo(percorsi, alert=allarme, preflight=_preflight_bloccato)
+
+    assert esito.exit_code == EXIT_OK  # la giornata di stanotte resta un successo
+    assert esito.preflight_ready is False
+    assert esito.preflight_alert_shown is True
+    assert len(allarme.messages) == 1
+    messaggio = allarme.messages[0]
+    assert "stanotte NON partira'" in messaggio
+    assert "TRADERLAB_ALLOW_LIVE_API assente" in messaggio
+    testo = esito.log_path.read_text(encoding="utf-8")
+    assert "avviso preflight mostrato" in testo
+
+
+def test_preflight_non_pronto_e_giornata_mancante_mostrano_due_avvisi(percorsi):
+    """Due fatti diversi (ieri notte e stanotte): due avvisi, non uno che ne nasconde l'altro."""
+    TraderLedger(percorsi["ledger_path"])
+    allarme = FakeAlert()
+
+    esito = _controllo(percorsi, alert=allarme, preflight=_preflight_bloccato)
+
+    assert esito.exit_code == EXIT_NO_VERBALI
+    assert esito.preflight_ready is False
+    assert len(allarme.messages) == 2
+    assert "NON ha prodotto verbali" in allarme.messages[0]
+    assert "stanotte NON partira'" in allarme.messages[1]
+
+
+def test_preflight_che_solleva_non_blocca_il_controllo(percorsi):
+    ledger = TraderLedger(percorsi["ledger_path"])
+    _scrivi_giornata(ledger, OGGI)
+
+    def preflight_che_solleva(**kwargs):
+        raise RuntimeError("powershell non disponibile")
+
+    esito = _controllo(percorsi, preflight=preflight_che_solleva)
+
+    assert esito.exit_code == EXIT_OK
+    assert esito.preflight_ready is None
+    testo = esito.log_path.read_text(encoding="utf-8")
+    assert "preflight" in testo and "eccezione" in testo
 
 
 # --------------------------------------------------------------------------
