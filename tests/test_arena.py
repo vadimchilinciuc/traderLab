@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from contracts.decision import Action
+from contracts.hashing import sha256_of
 from contracts.risk import RiskOutcome, RiskRule
 
 from arena.config import (
@@ -1039,6 +1042,139 @@ def test_cache_control_ignora_un_ultimo_messaggio_senza_tool_result():
     ]
     client.complete(system="s", messages=messages, tools=[])
     assert catturato["messages"] == messages
+
+
+def test_rito_diagnosi_caching_id_deterministico_permette_il_riuso(wired):
+    """RITO DIAGNOSI CACHING (2026-08-16).
+
+    Diagnosi: l'id che l'API assegna a un blocco tool_use cambia a ogni
+    generazione, anche a parita' di asset e argomenti. Il runner lo
+    rimandava indietro cosi' com'e' nel turno di submit (vecchio
+    `_to_params`/`_execute_tool`, senza `tool_ids`): il `messages` inviato
+    al turno di submit non era mai byte-identico tra due chiamate, nemmeno
+    per lo stesso asset, e il blocco degli ultimi tool_result (deterministico
+    per costruzione, D1) veniva riscritto in cache invece che riletto —
+    esattamente il pattern osservato in
+    `data/toolcalls/20260816T000019Z.jsonl` (cache_creation 1.001.811,
+    cache_read 236.381).
+
+    Con `_deterministic_tool_id` l'id sostituito e' derivato dal contenuto
+    (nome, argomenti, posizione), non dalla generazione: il `messages` del
+    turno di submit torna byte-identico tra le repliche dello stesso asset,
+    e un client fittizio che ricalca l'economia byte-esatta della cache
+    reale (scrive alla prima chiamata su un prefisso mai visto, rilegge alle
+    successive) lo dimostra rileggendo dalla seconda chiamata in poi.
+    """
+    store, snapshot, ledger, tool_log = wired
+
+    class _CacheAwareFakeClient:
+        """Id del tool_use diverso a ogni generazione, come l'API reale
+        (non normalizzato: quello e' compito del runner, non del client)."""
+
+        model_version = DEFAULT_MODEL_STRING
+
+        def __init__(self):
+            self._n = 0
+            self._seen_message_tokens: dict[str, int] = {}
+
+        def complete(self, *, system, messages, tools):
+            self._n += 1
+            asset = _asset_from(messages)
+            dossier = _dossier_from(messages)
+            if dossier is None:
+                return LLMResponse(
+                    content=[
+                        {
+                            "type": "tool_use",
+                            "name": "get_asset_dossier",
+                            "input": {"symbol": asset},
+                            "id": f"toolu_rand_{self._n}",
+                        }
+                    ],
+                    stop_reason="tool_use",
+                    model=DEFAULT_MODEL_STRING,
+                )
+            key = sha256_of(messages)
+            tokens = max(1, len(json.dumps(messages, sort_keys=True, default=str)) // 4)
+            if key in self._seen_message_tokens:
+                creation, read = None, self._seen_message_tokens[key]
+            else:
+                creation, read = tokens, None
+                self._seen_message_tokens[key] = tokens
+            payload = {
+                "asset": asset,
+                "action": "flat",
+                "size_fraction": 0.0,
+                "horizon": "1-3d",
+                "expected_holding": "1-3d",
+                "confidence": 0.5,
+                "features_used": [{"name": "price_vs_sma_20", "value": 0.0}],
+                "invalidation_conditions": [
+                    "Chiusura giornaliera sotto la media mobile a 20 barre."
+                ],
+                "risk_checks": [{"name": "costi_considerati", "passed": True, "note": ""}],
+            }
+            return LLMResponse(
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            f"I dati disponibili per {asset} non sostengono una tesi "
+                            "netta in nessuna direzione su questo orizzonte: resto "
+                            "fuori ed evito di forzare una lettura che i numeri non "
+                            "giustificano."
+                        ),
+                    },
+                    {
+                        "type": "tool_use",
+                        "name": "submit_decision",
+                        "input": payload,
+                        "id": f"toolu_rand_{self._n}_submit",
+                    },
+                ],
+                stop_reason="tool_use",
+                model=DEFAULT_MODEL_STRING,
+                usage=LLMUsage(
+                    input_tokens=2,
+                    output_tokens=50,
+                    cache_creation_input_tokens=creation,
+                    cache_read_input_tokens=read,
+                ),
+            )
+
+    # Un solo client "backend" condiviso tra le repliche: nella realta' le
+    # repliche parlano a client Anthropic separati (isolamento, §3/§6), ma
+    # la cache che stiamo simulando vive lato server Anthropic, condivisa
+    # per costruzione — qui il client fittizio la rappresenta.
+    backend = _CacheAwareFakeClient()
+    runner = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=lambda replica_id: backend,
+        config=ArenaConfig(replica_ids=("r1", "r2", "r3")),
+        context_git_sha="abcdef1",
+    )
+    runner.run_day(snapshot.snapshot_id, run_id="run-1")
+
+    for asset in snapshot.universe:
+        submit_entries = [
+            e
+            for e in tool_log.read_all()
+            if e["tool"] == "llm_complete"
+            and e["args"]["asset"] == asset
+            and e["meta"]["output_tokens"] == 50
+        ]
+        assert len(submit_entries) == 3  # una per replica
+        # La prima chiamata (prima replica) scrive la cache su un prefisso
+        # mai visto per questo asset.
+        assert submit_entries[0]["meta"]["cache_creation_input_tokens"] > 0
+        assert submit_entries[0]["meta"]["cache_read_input_tokens"] is None
+        # Dalla seconda chiamata in poi (repliche successive, stesso asset)
+        # il prefisso e' byte-identico: cache riletta, non riscritta.
+        for entry in submit_entries[1:]:
+            assert entry["meta"]["cache_read_input_tokens"] > 0
+            assert entry["meta"]["cache_creation_input_tokens"] is None
 
 
 def test_un_400_non_viene_ritentato():

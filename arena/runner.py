@@ -392,12 +392,39 @@ class DailyRunner:
             if any(_name(b) == SUBMIT_TOOL_NAME for b in tool_uses):
                 break
 
-            messages.append({"role": "assistant", "content": _to_params(response.content)})
+            # RITO DIAGNOSI CACHING: l'id che l'API assegna a un blocco
+            # tool_use cambia a ogni generazione anche a parita' di
+            # asset/argomenti. Rimandarlo indietro cosi' com'e' (come
+            # faceva prima questo punto) rende il prefisso della richiesta
+            # di submit diverso a ogni chiamata, e il blocco degli ultimi
+            # tool_result — identico per costruzione tra le repliche dello
+            # stesso asset, D1 — non viene mai riletto dalla cache: viene
+            # riscritto da zero a ogni chiamata. L'API non verifica l'id
+            # contro nulla al di fuori del giro in cui compare: le basta che
+            # l'id del tool_use nel turno dell'assistente coincida con il
+            # tool_use_id del tool_result nello stesso turno. Sostituendolo
+            # con uno derivato dal contenuto (nome, argomenti, posizione)
+            # rende il prefisso riproducibile a parita' di asset,
+            # indipendentemente da quale id il modello abbia scelto quella
+            # volta.
+            det_ids = [
+                _deterministic_tool_id(_name(b), _input(b), i)
+                for i, b in enumerate(tool_uses)
+            ]
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": _to_params(response.content, tool_ids=det_ids),
+                }
+            )
             tool_results = []
-            for block in tool_uses:
+            for block, tool_use_id in zip(tool_uses, det_ids):
                 tool_results.append(
                     self._execute_tool(
-                        block=block, snapshot_id=snapshot.snapshot_id, replica_id=replica_id
+                        block=block,
+                        snapshot_id=snapshot.snapshot_id,
+                        replica_id=replica_id,
+                        tool_use_id=tool_use_id,
                     )
                 )
             messages.append({"role": "user", "content": tool_results})
@@ -429,7 +456,7 @@ class DailyRunner:
         )
 
     def _execute_tool(
-        self, *, block: Any, snapshot_id: str, replica_id: str
+        self, *, block: Any, snapshot_id: str, replica_id: str, tool_use_id: str
     ) -> dict[str, Any]:
         name = _name(block)
         args = _input(block) or {}
@@ -449,7 +476,7 @@ class DailyRunner:
             is_error = True
         return {
             "type": "tool_result",
-            "tool_use_id": _id(block),
+            "tool_use_id": tool_use_id,
             "content": content,
             "is_error": is_error,
         }
@@ -497,9 +524,29 @@ def _id(block: Any) -> str:
     return value or "tool_use_missing_id"
 
 
-def _to_params(content: list[Any]) -> list[dict[str, Any]]:
-    """Converte i blocchi di risposta in blocchi di richiesta per il turno dopo."""
+def _deterministic_tool_id(name: str | None, args: dict[str, Any] | None, index: int) -> str:
+    """Id stabile per un blocco tool_use, derivato dal suo contenuto.
+
+    Sostituisce l'id assegnato dall'API alla generazione corrente, che
+    cambia a ogni chiamata anche a parita' di tool e argomenti (RITO
+    DIAGNOSI CACHING). `index` distingue due chiamate allo stesso tool con
+    gli stessi argomenti nello stesso turno.
+    """
+    digest = sha256_of({"name": name, "args": args or {}, "index": index})
+    return f"toolu_det_{digest[:32]}"
+
+
+def _to_params(
+    content: list[Any], tool_ids: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Converte i blocchi di risposta in blocchi di richiesta per il turno dopo.
+
+    Se `tool_ids` e' passato, sostituisce l'id di ogni blocco `tool_use` (in
+    ordine di comparsa) con quello indicato invece di quello dell'API — vedi
+    `_deterministic_tool_id`.
+    """
     params: list[dict[str, Any]] = []
+    tool_idx = 0
     for block in content:
         block_type = (
             block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
@@ -511,10 +558,12 @@ def _to_params(content: list[Any]) -> list[dict[str, Any]]:
             if text:
                 params.append({"type": "text", "text": text})
         elif block_type == "tool_use":
+            block_id = tool_ids[tool_idx] if tool_ids is not None else _id(block)
+            tool_idx += 1
             params.append(
                 {
                     "type": "tool_use",
-                    "id": _id(block),
+                    "id": block_id,
                     "name": _name(block),
                     "input": _input(block) or {},
                 }
