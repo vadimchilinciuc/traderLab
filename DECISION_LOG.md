@@ -8,6 +8,8 @@ decisione che cambia si supera con una voce nuova, non si riscrive.
 | TL-001 | D1-D4 e build minimale di Fase 0 | attiva, **D2 superata da TL-002** |
 | TL-002 | Pin su Claude Fable 5 · soglie di regressione | attiva |
 | TL-003 | Stagione 0 autorizzata | attiva |
+| TL-004 | Fix caching applicato dentro la stagione, in chiave ripristino | attiva |
+| TL-005 | Lettura dichiarata del §5 (tetto token): LETTERALE | attiva |
 
 ---
 
@@ -181,3 +183,57 @@ di wallet.
   timbrato OTS in b1ee4d8); primo giorno atteso: 14/08/2026 00:00 UTC via
   task schedulato collaudato (exit 0x2 alla prova di cablaggio).
 - **Decisa da**: l'owner.
+
+---
+
+## TL-004 — Fix caching applicato dentro la stagione, in chiave ripristino
+
+- **Data**: 2026-08-17 (applicato fra la giornata 1 e la giornata 2)
+- **Stato**: attiva
+- **Commit**: c33fd0b
+- **Decisa da**: l'owner.
+
+**Natura**: RIPRISTINO del §2 del PREREG_LAB_S0, non modifica. Gli id di
+tool_use divergenti fra le repliche erano una fonte di divergenza di
+prefisso senza contenuto semantico; il fix li ha resi deterministici,
+restaurando la condizione dichiarata dal §2. Precisazione: il §2 non nomina
+caching né id di tool_use; dichiara "input byte-identici". Id divergenti
+rompono l'uguaglianza byte a byte anche a parità di contenuto semantico, ed
+è su quella clausola che poggia la qualificazione come ripristino.
+
+**Effetto misurato**: costo giornaliero da $13,8891 a $9,7996 (-29,44%),
+contro un atteso -50/55%. Il residuo è spiegato: le scritture del blocco di
+prefisso grande passano da 6 a 4, e le due che restano nascono dalla
+divergenza autentica del modello sulla scelta dei tool, non riparabile
+durante S0 senza cambiare cosa il Trader vede.
+
+**Covariata annotata**: la dispersione della confidence passa da 0,0167
+(G1) a 0,0000 (G2). n=2, ipotesi non tendenza. Prefissi identici potrebbero
+aver ridotto il rumore da batch-invariance. Da tenere presente quando si
+leggerà il metro del rumore a fine stagione.
+
+---
+
+## TL-005 — Lettura dichiarata del §5 del PREREG_LAB_S0 (tetto token): LETTERALE
+
+- **Data**: 2026-08-17
+- **Stato**: attiva
+- **Decisa da**: l'owner.
+
+Dichiarata PRIMA della fine della stagione, come la clausola richiede: a
+fine stagione la scelta sarebbe contaminata dal sapere quante giornate sono
+state raccolte.
+
+**Contenuto**: il tetto si applica al campo `input_tokens` dell'oggetto
+usage, distinto dai campi `cache_creation_input_tokens` e
+`cache_read_input_tokens`. Due argomenti indipendenti: (i) il §4, punto 5,
+ancora la definizione al campo usage ("Consumo: token input/output per
+decisione e per giornata, dal campo usage"), dove input_tokens è un campo
+distinto da cache_creation_input_tokens e cache_read_input_tokens; (ii)
+l'implementazione fu costruita prima della stagione sotto la stessa
+pre-registrazione.
+
+**Conseguenza dichiarata apertamente**: con questa lettura il tetto non
+morde (994 e 856 token contro un milione). La protezione di budget effettiva
+è il limite di spesa Console, non il tetto token. Questo è un reperto sul
+§5, registrato, non una modifica alla stagione.
