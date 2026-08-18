@@ -6,10 +6,12 @@ decisione che cambia si supera con una voce nuova, non si riscrive.
 | Voce | Oggetto | Stato |
 | --- | --- | --- |
 | TL-001 | D1-D4 e build minimale di Fase 0 | attiva, **D2 superata da TL-002** |
-| TL-002 | Pin su Claude Fable 5 · soglie di regressione | attiva |
+| TL-002 | Pin su Claude Fable 5 · soglie di regressione | attiva, **Decisione 1 (pin) superata da TL-007** |
 | TL-003 | Stagione 0 autorizzata | attiva |
 | TL-004 | Fix caching applicato dentro la stagione, in chiave ripristino | attiva |
 | TL-005 | Lettura dichiarata del §5 (tetto token): LETTERALE | attiva |
+| TL-006 | Stagione 0 chiusa anticipatamente per allocazione di budget | attiva |
+| TL-007 | Pin su Claude Opus 5 · supera il pin di TL-002 | attiva |
 
 ---
 
@@ -237,3 +239,111 @@ pre-registrazione.
 morde (994 e 856 token contro un milione). La protezione di budget effettiva
 è il limite di spesa Console, non il tetto token. Questo è un reperto sul
 §5, registrato, non una modifica alla stagione.
+
+---
+
+## TL-006 — Stagione 0 chiusa anticipatamente per decisione di allocazione
+
+- **Data**: 2026-08-18
+- **Stato**: attiva
+- **Decisa da**: l'owner.
+
+**Esito: CHIUSA ANTICIPATAMENTE.** Non è **INVALIDA** nel senso del §3 del
+PREREG_LAB_S0, che riserva quel termine all'inaffidabilità operativa (cap di
+calendario scaduto senza raggiungere le giornate). Qui la macchina ha
+funzionato: tre giornate su tre eseguite, tutte `day_completed` nell'ops
+ledger, catene hash verdi, snapshot congelati e rivalidati contro il proprio
+`snapshot_id`. È un caso non previsto dal §3 e viene dichiarato come tale.
+
+**Motivazione, unica: allocazione di budget.**
+
+| Giornata | Costo misurato |
+| --- | --- |
+| 2026-08-16 | $13,8891 |
+| 2026-08-17 | $9,7996 |
+| 2026-08-18 | $13,9027 |
+
+Venti giornate al modello pinnato costerebbero circa $196; le stesse giornate
+a tariffa Opus 5 costerebbero circa la metà. L'owner ha deciso che la
+differenza non è giustificata dal ritorno atteso della stagione.
+
+**Cosa NON è entrato in questa decisione.** Nessuna delle misure primarie del
+§4 è stata letta per motivarla. Il §5 le riserva alla fine della stagione, e la
+clausola è stata rispettata. Le osservazioni raccolte durante S0 su confidence,
+dispersione, coerenza dichiarativa e costo sono reperti sulla macchina,
+annotati altrove, e non hanno concorso alla chiusura.
+
+**Conseguenze dichiarate**
+
+- il gate (i) del §7 (≥ 20 giornate) non è soddisfatto: la Stagione 1 **non**
+  parte da questa stagione;
+- le misure primarie del §4 (dispersione inter-repliche, baseline della suite
+  di regressione, telemetria) non verranno mai lette: servono venti giornate su
+  un modello solo, e non esistono;
+- la suite di regressione comportamentale del §6 non è mai stata congelata:
+  richiedeva gli snapshot dei primi 12 giorni effettivi, e le giornate sono
+  tre. Non è una pendenza persa, è una finestra che si riapre col disegno della
+  stagione nuova;
+- il record delle tre giornate resta valido come archivio e come unico
+  esemplare comportamentale del modello pinnato in S0;
+- il task pianificato è disabilitato, non cancellato: fotografia XML completa
+  conservata per la ricostruzione.
+
+---
+
+## TL-007 — Pin su `claude-opus-5`
+
+- **Data**: 2026-08-18
+- **Stato**: attiva
+- **Decisa da**: l'owner.
+- **Supera**: la **Decisione 1** di TL-002 (il pin su `claude-fable-5`). La
+  Decisione 2 di TL-002 (soglie della suite di regressione) resta invariata.
+
+**Contenuto**: il modello del Trader passa da `claude-fable-5` a
+`claude-opus-5`. TL-002 resta a registro e non si riscrive: viene superata da
+questa voce, come TL-002 aveva superato D2 di TL-001.
+
+**Motivazione: costo.** Tariffe da listino ufficiale Anthropic, lette il
+17/08/2026: Fable 5 $10 per milione di token in input e $50 in output; Opus 5
+$5 e $25. Scrittura in cache 1,25x il prezzo base dell'input, lettura da cache
+0,1x. A parità di token consumati il costo si dimezza.
+
+**Cosa questa voce NON afferma**: che Opus 5 decida meglio. Un confronto di
+qualità fra modelli richiede l'arena appaiata prevista dalla Stagione 1, e non
+è stato fatto. L'unica evidenza raccolta è un giro cieco k=1 su uno snapshot
+congelato, fuori stagione, su CLI e non via API pinnata: indizio, non misura.
+
+**Vincoli che questa decisione porta con sé**
+
+- cambio modello = **nuovo track record**. La stagione nuova è un'altra
+  Stagione 0, non la Stagione 1;
+- richiede una pre-registrazione nuova, che **non** riscrive
+  `docs/PREREG_LAB_S0.md`: quello resta congelato e si cita;
+- richiede il rito del pin del §8 con la string nuova, ri-verificata contro
+  l'endpoint, e un FreezeManifest nuovo con timbro OTS.
+
+**Precondizione al rito del pin**, dichiarata qui perché scoperta dopo il pin
+precedente. Il rito Z1 del 18/08 ha accertato che `scripts/run_day.py`
+ricostruisce il FreezeManifest a runtime invece di caricare quello committato:
+i tre `freeze_id` delle giornate di S0 differiscono fra loro e nessuno coincide
+con quello del manifest firmato e timbrato OTS. La causa è che il manifest
+ricostruito incorpora il git sha corrente, che cambia a ogni commit anche
+quando l'agente non è cambiato.
+
+Conseguenza: il timbro certifica un documento che nessuna esecuzione ha usato,
+e il `freeze_id` — che esiste per accorgersi se l'agente è cambiato — cambia
+comunque, quindi non se ne accorgerebbe.
+
+Nessuna violazione di S0 è avvenuta: `prompt_sha`, `model_version`,
+`persona_sha` e `system_prompt_sha` sono identici in tutte e tre le giornate e
+coincidono col manifest.
+
+Il pin della stagione nuova **non è valido** finché il runner non carica il
+manifest committato, ricalcola il `freeze_id` e si rifiuta di girare se
+diverge. La riparazione è codice e vive fuori da questa voce.
+
+**Stima di costo, dichiarata come stima**: circa $4,90 al giorno sui conteggi
+di token della giornata 2, cioè circa $98 per venti giornate. L'85% del costo è
+scrittura in cache e dipende da quanti prefissi distinti il modello genera, che
+varia col modello. Incertezza dichiarata ±20%; il primo giorno reale la
+corregge.
