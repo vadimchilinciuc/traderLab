@@ -4,6 +4,32 @@ Questo file è il contratto di ingegneria del repo `traderLab`. Vale per ogni
 agente (umano o LLM) che tocchi questo codice. Le regole non sono consigli:
 violarle invalida il track record.
 
+## Le regole del programma
+
+Questo file è il contratto di ingegneria di `traderLab`. Sopra di esso stanno
+le regole operative del programma, che vivono in un altro repository:
+`zeroPipes/docs/program/REGOLE_CHAT_ZEROPIPE_v3.md`, committate. Sono 50, più
+le convenzioni L1-L5. In caso di conflitto vince quel documento e la
+divergenza si segnala.
+
+Tre valgono da subito, perché riguardano azioni irreversibili:
+
+- **22.** Commit solo autorizzati dall'owner. Mai `git commit`, `git push`,
+  `git checkout`, `git stash` o `git rebase` senza autorizzazione esplicita
+  nel prompt del rito.
+- **3.** `/clear` prima di ogni rito nuovo.
+- **4.** Un repo, un rito alla volta.
+
+Lo stato del programma vive in `zeroPipes/docs/program/`: `CODA.md` per le
+pendenze, `PROGRAM_LEDGER.md` per campagne ed esiti. Lo stato di questo repo
+vive in `DECISION_LOG.md`, append-only.
+
+I referti dei riti arrivano all'owner via file allegato o percorso su disco:
+i paste lunghi in chat arrivano vuoti (bug noto).
+
+Se un file citato qui manca, chiederlo all'owner invece di ricostruirlo a
+memoria — regola 46.
+
 ## 0. Natura del repo
 
 - `traderLab` è un **cantiere**, non una stagione. Il cronometro della
