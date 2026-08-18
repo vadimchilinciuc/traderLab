@@ -1,0 +1,252 @@
+{
+  "generato_utc": "2026-08-18T08:08:25Z",
+  "head_git": "508ead0cf60d6ebeeb4048eccb282878d5565425",
+  "origine": "C:\\Users\\vadim.chilinciuc\\git\\traderLab",
+  "destinazione": "C:\\Users\\vadim.chilinciuc\\ZeroPipe_Backup\\traderLab_S0_20260818_080825",
+  "n_file": 26,
+  "byte_totali": 4792120,
+  "head_hash_ledger": "5e217d5c055500f7ad57bad6fb2982bcfa4734b92a4ff58b0816f6046fa2125d",
+  "head_hash_ops": "3891d9dc60fe3bd24de312047f1cdad616e5d432a53c3ccabab467807ea1ae06",
+  "stagione": {
+    "giornate_effettive": 3,
+    "giorni_nel_ledger_dei_verbali": [
+      "2026-08-16",
+      "2026-08-17",
+      "2026-08-18"
+    ],
+    "giorni_nell_ops_ledger": [
+      "2026-08-16",
+      "2026-08-17",
+      "2026-08-18"
+    ],
+    "righe_ledger_verbali": 18,
+    "righe_ops_ledger": 3,
+    "giornate": [
+      {
+        "data": "2026-08-16",
+        "decisioni_valide": 6,
+        "verbali_non_validi": 0,
+        "non_validi_per_motivo": {},
+        "righe_ledger": 6,
+        "repliche": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "asset": [
+          "BTC",
+          "ETH"
+        ],
+        "snapshot_id": [
+          "58ce62ffffc0e284d02a530b6d05cbfd232513f774cbc091ddf9dfdf22a03f3a"
+        ],
+        "run_id": [
+          "20260816T000019Z"
+        ],
+        "esito_ops_ledger": {
+          "eventi": [
+            "day_completed"
+          ],
+          "dettaglio": {
+            "day_completed": "snapshot 58ce62ffffc0e284d02a530b6d05cbfd232513f774cbc091ddf9dfdf22a03f3a"
+          }
+        }
+      },
+      {
+        "data": "2026-08-17",
+        "decisioni_valide": 6,
+        "verbali_non_validi": 0,
+        "non_validi_per_motivo": {},
+        "righe_ledger": 6,
+        "repliche": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "asset": [
+          "BTC",
+          "ETH"
+        ],
+        "snapshot_id": [
+          "a8d0230d0280dc50d2efe9ad6b0c4236a20829f54598fa976a5fca000137ef3b"
+        ],
+        "run_id": [
+          "20260817T000021Z"
+        ],
+        "esito_ops_ledger": {
+          "eventi": [
+            "day_completed"
+          ],
+          "dettaglio": {
+            "day_completed": "snapshot a8d0230d0280dc50d2efe9ad6b0c4236a20829f54598fa976a5fca000137ef3b"
+          }
+        }
+      },
+      {
+        "data": "2026-08-18",
+        "decisioni_valide": 4,
+        "verbali_non_validi": 2,
+        "non_validi_per_motivo": {
+          "model_refusal": 1,
+          "no_tool_use": 1
+        },
+        "righe_ledger": 6,
+        "repliche": [
+          "r1",
+          "r2",
+          "r3"
+        ],
+        "asset": [
+          "BTC",
+          "ETH"
+        ],
+        "snapshot_id": [
+          "cfea3edb46b2fac6c4a6d17759080250667a2cb4d56800f6115807760dc3f1ef"
+        ],
+        "run_id": [
+          "20260818T000016Z"
+        ],
+        "esito_ops_ledger": {
+          "eventi": [
+            "day_completed"
+          ],
+          "dettaglio": {
+            "day_completed": "snapshot cfea3edb46b2fac6c4a6d17759080250667a2cb4d56800f6115807760dc3f1ef"
+          }
+        }
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "data/ledger/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/ledger/ops.jsonl",
+      "bytes": 1137,
+      "sha256": "7e40d50fd8f89d1b8c3d26409a9685e623f1bfd08285159a4af7e1f95c435c47"
+    },
+    {
+      "path": "data/ledger/season0.jsonl",
+      "bytes": 91784,
+      "sha256": "2bdab61e03d313c3a946789751cf4ad4b35a721e4731c0c99569794e8d4377e4"
+    },
+    {
+      "path": "data/logs/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/logs/daily-2026-08-13.log",
+      "bytes": 173,
+      "sha256": "8992a46f30ed6c5bbe8746054dfd152cd65284c9eb46f2d8370e69df9fc0f8cc"
+    },
+    {
+      "path": "data/logs/daily-2026-08-14.log",
+      "bytes": 1085,
+      "sha256": "0c460ab44e2d89a0dadf76e6da5286565c01322a50c20a0a0443fbe5b1ed4f0d"
+    },
+    {
+      "path": "data/logs/daily-2026-08-15.log",
+      "bytes": 4501,
+      "sha256": "a34e478cb20b64d4d07625f0b6b259bca85e404700e71b06248d6878bdd15525"
+    },
+    {
+      "path": "data/logs/daily-2026-08-16.log",
+      "bytes": 2473,
+      "sha256": "c7cc34a55c35c8e1dd20062812534de1b49f6c8841b8d6545095095d67d4682c"
+    },
+    {
+      "path": "data/logs/daily-2026-08-17.log",
+      "bytes": 2473,
+      "sha256": "34e0de177241aaac076e5872632ae676a1a2dc1a7b7302d5413a3832033365ad"
+    },
+    {
+      "path": "data/logs/daily-2026-08-18.log",
+      "bytes": 2473,
+      "sha256": "50f84def0a6b46d28a4bdee67be0930c824242f1b1fac0577674579b95122c5b"
+    },
+    {
+      "path": "data/logs/morning-2026-08-14.log",
+      "bytes": 355,
+      "sha256": "87e2a174e6368b9e7ee4c88b8443c7bc2fc0e82648627647ed852b88e7d95720"
+    },
+    {
+      "path": "data/snapshots/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/snapshots/4881353f5d7931434a54ac45f66eaeb66a04ebafe71eb03b934f306b36d5e42f.json",
+      "bytes": 853315,
+      "sha256": "cb00640f102c4fcc5878537cbdd9a879599de364a9450960dc7e39cdf6211d10"
+    },
+    {
+      "path": "data/snapshots/58ce62ffffc0e284d02a530b6d05cbfd232513f774cbc091ddf9dfdf22a03f3a.json",
+      "bytes": 853061,
+      "sha256": "868b92ba9070b01c1506abc40599cc4ca5cfd1a6c166d6b8e93fe1b60e65c5de"
+    },
+    {
+      "path": "data/snapshots/a8d0230d0280dc50d2efe9ad6b0c4236a20829f54598fa976a5fca000137ef3b.json",
+      "bytes": 852972,
+      "sha256": "0a97f2ba77b6c7a79f67611260d35c4a5826f2c7993987583e9c4e3311a3cac5"
+    },
+    {
+      "path": "data/snapshots/af99d3e96dc34f3eee6d049ff72ee4df934a1dee692d2134e484df93bbedafc5.json",
+      "bytes": 32604,
+      "sha256": "21660738d82b39e6899f11a3a49ca3777a7a1a28681500832b95dec6d9fce0cb"
+    },
+    {
+      "path": "data/snapshots/c7cf96b71894f2a833086fce30667465b9d7780f9e4d63cd3f5c15c37fa4484e.json",
+      "bytes": 1165893,
+      "sha256": "7c3d71ca49884638fd5aa696b04dd032e3996b249d979622c03716cc2851e8ef"
+    },
+    {
+      "path": "data/snapshots/cfea3edb46b2fac6c4a6d17759080250667a2cb4d56800f6115807760dc3f1ef.json",
+      "bytes": 852867,
+      "sha256": "f965fff991d7f01ef333983f5d00438b90a8dda5172e65d2d16725d34d21ba59"
+    },
+    {
+      "path": "data/toolcalls/.gitkeep",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/toolcalls/20260816T000019Z.jsonl",
+      "bytes": 20889,
+      "sha256": "0aa078c687a3b6b4d2f5a0f4150fca3577c77a6ed9605199fe58fc05893802db"
+    },
+    {
+      "path": "data/toolcalls/20260817T000021Z.jsonl",
+      "bytes": 20107,
+      "sha256": "51c488594221dbdb8a8b62c054bd6f4b3aa8a488de193b7796a26727765a430e"
+    },
+    {
+      "path": "data/toolcalls/20260818T000016Z.jsonl",
+      "bytes": 24250,
+      "sha256": "52ef68d9ffaf5985b11fef2028d5bff2444d1c35b602b3619afd814c4dd783e5"
+    },
+    {
+      "path": "data/toolcalls/smoke-finale.jsonl",
+      "bytes": 2082,
+      "sha256": "626188a699889ace15317489c265e8cd1d2caf71f98f3c5c036f3a1648a9577c"
+    },
+    {
+      "path": "data/toolcalls/tl002.jsonl",
+      "bytes": 2040,
+      "sha256": "91a18d69f50627d6552c64d3d6748082600f1f418ab3cb1659fa7c407ad8d8b2"
+    },
+    {
+      "path": "manifests/trader_v0_freeze_manifest.json",
+      "bytes": 2088,
+      "sha256": "429186db0eabc30e5fbb55b5b402a59995d7756fb5eea33a251aa28a0f1b98e8"
+    },
+    {
+      "path": "manifests/trader_v0_freeze_manifest.json.ots",
+      "bytes": 3498,
+      "sha256": "9ee84700cba792ae0f4b3b8b09044c5ea168f2734c4ba752f50fad058a69eb6d"
+    }
+  ]
+}
