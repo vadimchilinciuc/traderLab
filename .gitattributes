@@ -1,0 +1,59 @@
+# .gitattributes — traderLab
+#
+# Perché questo file esiste.
+#
+# Gli artefatti ancorati con OpenTimestamps sono verificabili solo se i byte
+# che il timbro certifica sono gli stessi byte che chiunque materializza dal
+# repo. Senza questo file la conversione dei fine-riga in checkout dipende
+# dalla configurazione della macchina (`core.autocrlf`), e lo stesso commit
+# produce file diversi su Windows e su Linux: un digest che torna solo sulla
+# macchina dell'operatore è una promessa, non una prova.
+#
+# `-text` disattiva ogni conversione: ogni clone materializza i byte del blob,
+# identici ovunque. Le sedi degli artefatti ancorati, presenti e future, sono
+# coperte da questa regola.
+#
+# Evidenza e ricetta di verifica per i tre target già timbrati:
+#   docs/research/results/2026-08-20_PREREG-EVIDENCE_ANCORAGGI_OTS_S0.md
+
+# --- 1. Sedi ancorate: nessuna conversione dei fine-riga --------------------
+
+docs/**                                   -text
+manifests/**                              -text
+
+# --- 2. I timbri stessi sono binari ----------------------------------------
+
+*.ots                                     binary
+
+# --- 3. Eccezioni dichiarate: i due artefatti congelati e già timbrati ------
+#
+# I loro timbri OTS furono apposti sui byte del WORKING TREE convertito (CRLF),
+# non sui byte del blob (LF). Con `-text` i due file comparirebbero modificati
+# in eterno e nessuna `git add` sarebbe lecita, perché sono congelati. Si
+# conserva quindi lo stato attuale (`text=auto`, che su questa macchina
+# materializza CRLF) e si verifica il timbro applicando al blob la
+# trasformazione LF→CRLF, secondo la ricetta dell'evidenza citata sopra.
+# Decisione dell'owner del 20/08/2026, via (b): si annota, non si riscrive.
+#
+# `MANIFEST_S0.json` sta in radice e oggi nessuna regola `-text` lo tocca: la
+# riga è dichiarativa e blinda il suo stato anche se una regola di radice
+# venisse aggiunta in futuro.
+
+manifests/trader_v0_freeze_manifest.json  text=auto
+MANIFEST_S0.json                          text=auto
+
+# --- 4. Eccezioni di eredità: documenti pre-esistenti, non ancorati ---------
+#
+# Questi sei file furono committati con blob LF e stanno nel working tree con
+# CRLF (checkout con `core.autocrlf=true`). Nessuno di loro è ancorato: non c'è
+# alcun timbro in gioco. Sotto `-text` comparirebbero come modificati senza che
+# nulla sia cambiato, e il rumore nasconderebbe le modifiche vere. Si conserva
+# lo stato attuale. Quando uno di questi file verrà riscritto con fine-riga LF,
+# la sua riga qui va rimossa e il file torna sotto `-text`.
+
+docs/ANNOTAZIONE_CONFIDENCE_S0_2026-08-17.md                    text=auto
+docs/RETTIFICA_01_ANNOTAZIONE_S0_2026-08-17.md                  text=auto
+docs/research/2026-08-17_RICERCA_CONFIDENCE_DEGENERE.md         text=auto
+docs/research/2026-08-17_RICERCA_CONFIDENCE_LETTERATURA.md      text=auto
+docs/research/2026-08_AGENT_FAITHFULNESS_FRAMEWORKS_LITERATURE.md  text=auto
+docs/research/2026-08_LLM_TRADER_AGENTS_LITERATURE.md           text=auto

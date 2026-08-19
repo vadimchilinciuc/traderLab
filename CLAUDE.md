@@ -185,6 +185,18 @@ sul testo ripulito: è il file che viene congelato.
 - Vale anche fra repo: un numero prodotto qui e usato in `zeroPipes` si
   trascrive lì, e viceversa.
 
+## Ancoraggi OpenTimestamps
+
+- Quali byte i tre timbri OTS della Stagione 0 certificano, e come si verifica
+  ciascuno da qualunque macchina, sta in
+  `docs/research/results/2026-08-20_PREREG-EVIDENCE_ANCORAGGI_OTS_S0.md`. Due
+  dei tre timbri valgono sui byte CRLF del working tree, non sul blob: si
+  verificano con la ricetta del §5 di quel documento, non col confronto
+  diretto.
+- Regola per il futuro: ogni timbro OTS si appone sui byte del **blob**
+  (`git cat-file`), mai su una copia del working tree; ogni file da ancorare
+  nasce coperto da `.gitattributes` **prima** dello stamp.
+
 ## Mandati registrati
 
 - La revisione indipendente del **§7 del `docs/PREREG_LAB_S0.md`** richiede un
