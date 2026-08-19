@@ -1,0 +1,120 @@
+# traderLab — Confidence verbalizzata degenere, diversità di campionamento e metriche di calibrazione: cosa dice la letteratura e cosa fare
+
+## TL;DR
+- Il fenomeno osservato (confidence verbalizzata quasi-costante, con collasso a 0.55 identico su tutte e sei le decisioni al Giorno 2) è **sia (a) una proprietà generale e ben documentata degli LLM instruction-tuned/RLHF** — quantizzazione su valori "ancora", overconfidence e "answer-independence" — **sia (b) un risultato empirico specifico del modello/prompt che vale la pena riportare**, perché il valore modale mid-range (~0.55) e il collasso completo della diversità tra repliche sono meno documentati del più comune ancoraggio verso l'alto (0.9/1.0).
+- Sul piano metrico avete ragione: con forecast costante il termine di **resolution della decomposizione di Murphy (1973) va a zero** e il Brier score degenera in una funzione della sola uncertainty (base rate) più la reliability; non misura più skill discriminativa. La conclusione corretta NON è "l'agente non ha segnale": è che **l'elicitation è degenere e il Brier è la metrica sbagliata per questa condizione**. Va diagnosticato con misure di discriminazione (AUROC) e con elicitation alternative.
+- Raccomandazione operativa: trattare il collasso come un finding pre-registrato, attivare (o registrare come emendamento timestamped) un **piano di contingenza** che sostituisce/affianca il Brier con AUROC/rank-correlation e con una elicitation ridisegnata (top-k con probabilità, quote/odds, distribuzione verbalizzata), riportando sia l'analisi pianificata sia quella esplorativa.
+
+## Key Findings
+
+**1. La confidence verbalizzata è tipicamente quantizzata su pochi valori-ancora, non continua.** Lo studio "Rescaling Confidence" (arXiv:2603.09309, 2026) mostra che i modelli usano solo 15–28 valori distinti su una scala 0–100, con i tre valori più comuni che rappresentano oltre il 78% delle risposte. L'entropia osservata delle distribuzioni di confidence va da 0.95 bit a 1.88 bit contro i 6.66 bit di una distribuzione uniforme su 101 stati. Questo è direttamente rilevante alla vostra dispersione ≈ 0.0167 e poi 0.0000.
+
+**2. L'ancoraggio più documentato è verso l'ALTO (90/95/100), non verso il centro.** Nello stesso studio, un modello (Gemini 3.1 Pro) riporta esattamente 100 nel 68.4% dei casi. Il vostro caso — collasso su un valore mid-range (0.55) — è meno documentato e per questo è un finding empirico degno di nota, non solo la manifestazione di un fenomeno atteso.
+
+**3. La confidence verbalizzata è spesso "answer-independent": P(C|q,a) ≈ P(C|q).** Il numero è guidato dagli elementi strutturali del prompt (la parola "confidence", il range di scala) più che dal contenuto della domanda o dalla risposta effettiva. In dati clinici/tabulari la confidence verbalizzata è risultata quasi-costante e "carries zero information about correctness" con AUROC ≈ 0.50 (a livello di caso). Questo è il meccanismo più probabile dietro il vostro 0.55 costante.
+
+**4. RLHF/instruction-tuning degrada la calibrazione.** Il GPT-4 technical report documenta: "the pre-trained model is highly calibrated ... However, after the post-training process, the calibration is reduced (Figure 8)". Replicato su Llama-2. Ma la confidence verbalizzata ("just ask") è spesso meglio calibrata dei logit condizionali nei modelli RLHF, riducendo l'ECE "by a relative 50%" su TriviaQA/SciQ/TruthfulQA.
+
+**5. Claude è storicamente più debole degli GPT nel verbalizzare confidence calibrata.** Tian et al. trovano che Claude-1 è "less able to verbalize well-calibrated confidences" rispetto alla famiglia GPT, mentre Claude-2 migliora fino a un livello comparabile a gpt-3.5-turbo. Rilevante perché usate un modello Anthropic.
+
+**6. La diversità di campionamento collassa su task a output vincolato.** Template strutturati e formati vincolati (scegli 1 di 3 azioni + un numero) sopprimono i guadagni di diversità normalmente attesi da temperature > 0. Inoltre esiste non-determinismo a livello API (batch-invariance failure) che può alterare la diversità tra chiamate nominalmente indipendenti — ma questo tipicamente aggiunge rumore, non produce accordo perfetto.
+
+**7. Con forecast costante il Brier è non-informativo per costruzione.** Decomposizione di Murphy: BS = Reliability − Resolution + Uncertainty. Un forecast che emette sempre lo stesso valore ha resolution = 0. Il paradigma di Gneiting-Balabdaoui-Raftery ("maximize sharpness subject to calibration") chiarisce che il vostro agente è potenzialmente calibrato-in-the-large ma non sharp: manca di risoluzione/discriminazione.
+
+## Details
+
+### Area 1 — Verbalized confidence: anchoring e clustering
+
+La base concettuale è Lin, Hilton & Evans, "Teaching Models to Express Their Uncertainty in Words" (arXiv:2205.14334, TMLR 2022): un GPT-3 fine-tuned può esprimere in linguaggio naturale una confidence ("90% confidence") che mappa su probabilità ben calibrate, senza usare i logit, e generalizza moderatamente sotto distribution shift (test suite CalibratedMath, 21 task aritmetici). È il primo lavoro a dimostrare "verbalized probability" calibrata.
+
+Tuttavia, la letteratura successiva documenta ampiamente che, nei modelli chat off-the-shelf, la distribuzione della confidence verbalizzata è **fortemente quantizzata**. "Rescaling Confidence: What Scale Design Reveals About LLM Metacognition" (arXiv:2603.09309, 2026) riporta che su scala [0,100] i modelli si concentrano su pochi round-number anchors: Gemini 3.1 Pro riporta esattamente 100 nel 68.4% dei casi; GPT-5.2 e Qwen3-235B concentrano su 95; la famiglia LLaMA-4 su 90; i tre valori più comuni coprono >78% delle risposte per ogni modello; solo 15–28 valori distinti su 101 vengono usati; l'entropia osservata va da 0.95 bit (Gemini 3.1 Pro) a 1.88 bit (LLaMA-4-Maverick) contro 6.66 bit di una uniforme. Importante: gli AUROC restano relativamente alti, cioè il segnale discretizzato preserva un ordinamento grossolano corretto/scorretto.
+
+"Always So Sure: Can LLM's Confidence be Trusted?" (OpenReview, ~2025; sotto review, provenienza da corroborare) trova che la confidence verbalizzata è "highly quantized, clustering around specific values (e.g., 0, 90, 100)" con minima differenziazione tra risposte corrette e scorrette, e che — via causal mediation analysis — la generazione dei punteggi è guidata da elementi strutturali del prompt (la parola "confidence", il range di scala) più che dal contenuto della domanda.
+
+**Overconfidence e hedging.** Xiong et al., "Can LLMs Express Their Uncertainty?" (arXiv:2306.13063, ICLR 2024) su cinque dataset e cinque modelli (incluso GPT-4): gli LLM sono tipicamente overconfident quando verbalizzano, con "the majority of confidence scores falling in the 80–100 range"; GPT-4 ha "an average AUROC of merely 62.7%—close to the 50% random guess threshold", mentre GPT-3/GPT-3.5/Vicuna hanno "average ECE exceeding 0.377". I metodi consistency-based battono la confidence verbalizzata nella maggior parte dei casi; i metodi white-box (logit) battono i black-box ma "the gap is narrow, e.g., 0.522 to 0.605 in AUROC".
+
+**Answer-independence** — il meccanismo più rilevante per il vostro 0.55 costante. Seo et al., "ADVICE: Answer-Dependent Verbalized Confidence Estimation" (arXiv:2510.10913, ACL 2026) identificano formalmente la "answer-independence" (la mancata condizione della confidence sulla propria risposta) come driver primario dell'overconfidence sistematica: P(C|q,a) ≈ P(C|q). Heo et al., "Do LLMs Estimate Uncertainty Well in Instruction-Following?" (arXiv:2410.14582, NeurIPS 2024 workshop/ICLR 2025) mostrano che la confidence verbalizzata è influenzata dal task formatting più che dalla correttezza. In dati clinici tabulari, Dasula et al. (arXiv:2606.19509, EIML@ICML 2026) trovano confidence quasi-costante fissata dal template (0.856 zero-shot, 0.937 few-shot) indipendentemente dall'evidenza SHAP, con "confidence predicts errors at exactly chance level (accuracy=0.490, AUROC=0.50)". Questo è l'analogo diretto del vostro fenomeno: un valore fisso per ogni decisione che porta zero informazione discriminativa.
+
+**Verbalized vs token-level/internal.** Kadavath et al., "Language Models (Mostly) Know What They Know" (arXiv:2207.05221, Anthropic 2022): i modelli grandi sono ben calibrati su domande multiple-choice/true-false nel formato giusto; P(True) auto-valutato scala e migliora con la dimensione; le policy RLHF hanno calibrazione molto scarsa ma un temperature scaling a T≈2.5 la corregge in gran parte. Tian et al. (sotto) trovano che, per i modelli RLHF, la confidence verbalizzata batte i logit condizionali. Yoon et al., "Reasoning Models Better Express Their Confidence" (arXiv:2505.14489, NeurIPS 2025): i reasoning model con CoT esteso battono le controparti non-reasoning in 33 su 36 setting, aggiustando dinamicamente la confidence durante il ragionamento e producendo distribuzioni più diversificate (meno overconfident).
+
+### Area 2 — Effetto RLHF / instruction tuning
+
+Il GPT-4 technical report (arXiv:2303.08774, 2023) è la fonte originale, verbatim: "the pre-trained model is highly calibrated (its predicted confidence in an answer generally matches the probability of being correct). However, after the post-training process, the calibration is reduced (Figure 8)". Replicato: Tian et al. — "We first replicate the finding for GPT-4 (OpenAI, 2023) that RLHF can worsen the calibration of a model's conditional probabilities using the open-source Llama-2-70B base and chat models (Figure 2)". Meccanismo: l'RLHF riduce l'entropia delle distribuzioni di output (mode collapse / lower-entropy completions), spingendo verso pochi valori-ancora e overconfidence. Non universalmente irreversibile: SuperHF (arXiv:2310.16763) sostiene di mantenere/migliorare la calibrazione, e Kadavath mostra che il temperature scaling la recupera.
+
+Differenze tra famiglie: Tian et al., "Just Ask for Calibration" (arXiv:2305.14975, EMNLP 2023) — Claude-1 "less able to verbalize well-calibrated confidences" vs GPT; Claude-2 comparabile a gpt-3.5-turbo e superiore a GPT-* su TruthfulQA. Numeri esatti (ECE / AUC verbalized): Claude-1 su TriviaQA top-2 ECE 0.046 / AUC 0.875; su SciQ AUC verbalizzati ~0.66–0.69; su TruthfulQA AUC crollano a ~0.35–0.41. Claude-2 su TriviaQA top-2 ECE 0.049 / AUC 0.918. Per confronto GPT-4 verbalized su TriviaQA raggiunge ECE ~0.024–0.041 con AUC ~0.94–0.96. Nessun follow-up dedicato 2024–2026 isola Claude specificamente (gap segnalato).
+
+### Area 3 — Diversità di campionamento tra prompt identici
+
+Self-consistency (Wang et al., arXiv:2203.11171, 2022): campionando più catene di ragionamento e prendendo la maggioranza si migliora l'accuratezza; l'accordo tra campioni indipendenti è un segnale di confidence. Ma "agreement ≠ correctness": un modello può ripetere una risposta per euristica memorizzata, misconception condivisa o hallucination sistematica ("When LLMs Agree, Are They Right?", arXiv:2607.08065). L'accordo satura (diminishing returns) con il numero di campioni.
+
+**Collasso della diversità su output vincolati.** "The Price of Format: Diversity Collapse in LLMs" (arXiv:2505.18949) documenta che i template chat completi impongono un vincolo forte sulla libertà generativa e attenuano fortemente i guadagni di diversità dalla temperatura, molto più dei prompt semplici. Su task a spazio-risposta piccolo (1 di 3 azioni + un numero), è atteso che il modello diventi effettivamente quasi-deterministico anche a temperatura > 0: la massa di probabilità è concentrata sul token argmax e la temperatura non basta a spostarla. Questo spiega BTC 3/3 short ed ETH 3/3 flat.
+
+**Non-determinismo API.** OpenAI dichiara output "mostly deterministic"; Anthropic documenta che "even with a temperature of 0.0, the results will not be fully deterministic". La causa dominante non è la concorrenza GPU di per sé ma il **batch-invariance failure**: batch dinamici cambiano l'ordine delle riduzioni floating-point. Thinking Machines Lab ("Defeating Nondeterminism in LLM Inference", thinkingmachines.ai, 11 sett. 2025) ha misurato che 1.000 richieste identiche a temperatura 0 sul modello Qwen3-235B-A22B-Instruct-2507 (prompt "Tell me about Richard Feynman") producono 80 completions distinte (la più comune 78/1.000); con kernel batch-invariant tutte le 1.000 diventano bitwise identiche. Nota critica: questo tipicamente **aggiunge** varianza tra chiamate, non la rimuove; quindi il vostro collasso a dispersione 0.0000 è più coerente con concentrazione della distribuzione sottostante (argmax dominante + answer-independence sul numero) che con caching/determinismo artificiale. Ma va escluso empiricamente (vedi Recommendations).
+
+### Area 4 — Metriche quando la probabilità è degenere
+
+**Decomposizione di Murphy (1973).** Per N forecast p_i con esiti x_i, partizionati in K bin:
+
+BS = (1/N)Σ(p_i − x_i)² = UNC + REL − RES, dove
+- UNC = ō(1−ō) (varianza dell'esito, il base rate; fuori dal controllo del forecaster);
+- REL = (1/N)Σ n_k(p̄_k − ō_k)² (reliability/calibrazione: quanto p_k devia dalla frequenza empirica condizionata; 0 è ideale);
+- RES = (1/N)Σ n_k(ō_k − ō)² (resolution: variabilità dei forecast che traccia variazioni reali dell'esito; più alta è meglio).
+
+Come formula lo stesso Murphy tramite l'attesa (arXiv:2106.14345): E[S(P,X)] = Var(X) − Var_P[E_X(X|P)] + E_P{[E_X(X|P) − P]²}. "A forecasting scheme that constantly issues the same probabilities has zero resolution" (formulazione standard, arXiv:1303.6182).
+
+**Con forecast costante p_i = c per ogni i:** c'è un solo bin, ō_k = ō, quindi **RES = 0**. Il Brier si riduce a UNC + REL = ō(1−ō) + (c − ō)². Non dipende più da alcuna capacità discriminativa; è minimizzato banalmente scegliendo c = ō (il base rate). Un forecaster con "no resolution" è inutile per il trading pur potendo avere ottimo Brier: è esattamente la degenerazione che temete. Il vostro caso 0.55 costante è la versione empirica: il Brier misurerebbe solo quanto 0.55 è vicino all'hit-rate.
+
+**Alternative/complementi.**
+- **Discriminazione pura:** AUROC/ROC (probabilità che un caso positivo riceva confidence più alta di uno negativo), rank correlation (Spearman) tra confidence ed esito. AUROC ≈ 0.5 = nessun segnale; è la diagnosi decisiva per distinguere "elicitation degenere" da "nessun segnale".
+- **Decomposizioni refinement/calibration**, proper scoring rules che separano discrimination da calibration; distinzione calibration-in-the-small vs in-the-large.
+- **Gneiting, Balabdaoui & Raftery (2007), "Probabilistic Forecasts, Calibration and Sharpness"** (JRSS-B 69:243–268): il forecaster ideale massimizza la **sharpness** (concentrazione delle distribuzioni predittive, proprietà del solo forecast) **subject to calibration**. Un forecast costante è il caso limite di calibrazione senza sharpness: la naive climatology. È il quadro teorico per dire "l'agente è forse calibrato ma non sharp/informativo". Vedi anche Gneiting & Raftery (2007), "Strictly proper scoring rules, prediction, and estimation" (JASA 102:359–378) per la scelta di regole proprie.
+
+**Le tre ipotesi e come distinguerle empiricamente:**
+1. "L'agente non ha segnale discriminativo" → AUROC ≈ 0.5 anche con elicitation ridisegnata E le azioni (long/short/flat) non predicono gli esiti.
+2. "La metrica è sbagliata" → il Brier degenera ma le azioni discrete predicono gli esiti (hit-rate > base rate, AUROC delle azioni > 0.5): allora il problema è che il Brier sulla confidence costante non cattura lo skill che sta nelle azioni.
+3. "L'elicitation è sbagliata" → l'internal signal (self-consistency tra campioni, p(True), logit) discrimina meglio della confidence verbalizzata costante: cambiando prompt/formato la dispersione torna e l'AUROC sale.
+
+### Area 5 — Elicitation methods che allargano la distribuzione
+
+- **Top-k con probabilità:** far produrre k risposte candidate ciascuna con probabilità (Tian et al. "Verb. 1S top-k"; Xiong et al.) migliora consistentemente la reliability riducendo l'overconfidence a costo di un solo forward pass. In "BAS: A Decision-Theoretic Approach..." (arXiv:2604.03216), top-3 porta Llama-3.3-70B da BAS −2.97 a −0.25 su SimpleQA.
+- **Odds/betting quotes:** chiedere quote scommesse eque invece di probabilità (Shafer 2021; usato in "Confidence in the Reasoning of LLMs", HDSR 2025) può forzare deliberazione sull'incertezza.
+- **Distribuzione verbalizzata / percentili** ("Let the Model Distribute Its Doubt", arXiv:2511.14275): far distribuire la massa su più candidati.
+- **Multi-step / "consider the opposite" / evidence-for-and-against** e CoT: Xiong et al. e Yoon et al. mostrano che il ragionamento lento allarga la distribuzione e migliora la calibrazione.
+- **Fine-tuning con proper scoring rule** (ConfTuner, tokenized Brier loss, arXiv:2508.18847) e answer-grounding (ADVICE).
+
+**Attenzione:** alcuni metodi allargano i numeri senza aggiungere informazione. Il test è se migliorano AUROC/discriminazione, non solo l'ECE — ricordando la trappola: **un forecaster che dice sempre 50% ha ECE perfetto ma AUROC 0.5** (nota esplicita in Tian et al.). Per questo l'ECE da solo NON deve essere il criterio.
+
+**Finanza/trading.** La letteratura recente ("Beyond Forecasting: The Belief-to-Trade Layer", arXiv:2607.03015; KTD-FIN, arXiv:2605.28359; Foresight Arena, arXiv:2605.00420) riporta consistentemente che buoni punteggi probabilistici non si traducono in trade profittevoli, e raccomanda un trading layer deterministico separato dalla confidence dell'LLM, con position sizing (es. fractional Kelly) e risk control fuori dal prompt. Foresight Arena mostra formalmente (via decomposizione di Murphy) che l'alpha richiede resolution gain (edge informativo), non solo reliability. KTD-FIN usa il Brier sulla confidence per-order solo come diagnostico, non nel pannello headline.
+
+### Area 6 — Governance / experimental design
+
+La letteratura sulla pre-registrazione (Center for Open Science; CONSORT/ARRIVE per i trial) è chiara: cambiare l'outcome primario dopo aver visto i dati ("outcome switching") è una violazione seria e diffusa (fino al 67% dei trial in alcune review; 31.7% dei trial su ClinicalTrials.gov ha cambiato outcome primario). MA emendamenti e aggiornamenti sono **ammessi prima di analizzare i dati/prima che gli esiti siano noti**, se timestamped e con razionale documentato (COS: "Updates or amendments to a preregistration are permissible ... prior to analyzing the data (up until the outcomes of the study are known)"). Il meccanismo accettato è: (a) contingenze pre-specificate "if X then Y" nel piano originale; (b) emendamenti registrati timestamped prima di guardare gli outcome; (c) riportare sia l'analisi pianificata sia quella esplorativa. Esempi pratici di questa disclosure in paper LLM pre-registrati esistono già (es. arXiv:2606.15877, che documenta un cambio di regressore primario via emendamento timestamped prima della raccolta dei dati confermativi).
+
+Nel vostro caso il collasso della confidence è visibile ai Giorni 1–2 **senza dover guardare gli esiti di mercato** (dipende solo dagli output del modello, non dai P&L): questo rende difendibile un emendamento timestamped che aggiunge metriche di discriminazione, perché la decisione non è contingente sui risultati di skill. La best practice è documentare la contingenza ora, prima che maturino gli esiti a 20 giorni.
+
+## Recommendations
+
+**Fase 0 — Immediata (Giorni 2–3, prima di conoscere gli esiti di mercato):**
+1. Registrare un **emendamento timestamped** al pre-registration che: (i) documenta il collasso della confidence come osservazione; (ii) aggiunge metriche di discriminazione (AUROC della confidence e delle azioni vs esiti, rank correlation) come co-primarie o secondarie; (iii) mantiene il Brier come pianificato ma lo riporta **decomposto** (UNC/REL/RES) così che il RES≈0 sia esplicito e trasparente. Questo evita l'accusa di outcome switching perché non è contingente sui P&L.
+2. Riportare esplicitamente che il Brier è degenere per costruzione quando RES=0 (con la matematica di Murphy), così il finding è documentato, non nascosto.
+
+**Fase 1 — Diagnosi delle tre ipotesi (in parallelo, senza toccare l'esperimento principale):**
+3. Eseguire in shadow un **A/B di elicitation** su snapshot congelati identici: (a) baseline attuale; (b) top-k con probabilità; (c) odds/betting; (d) CoT "evidence for/against then commit"; (e) distribuzione verbalizzata. Misurare dispersione, entropia (bit) e soprattutto AUROC. Se la dispersione torna e l'AUROC sale → **elicitation sbagliata** (ipotesi 3), la più probabile dato l'answer-independence documentata.
+4. Estrarre un **internal signal indipendente**: self-consistency tra le 3 repliche (già lo avete) + eventualmente p(True) o log-prob se l'API li espone. Se l'internal signal discrimina meglio del numero verbalizzato → conferma ipotesi 3.
+5. **Escludere il determinismo API artificiale**: inviare la stessa singola chiamata N=100+ volte e verificare la distribuzione. Se ottenete varianza (come atteso da batch-invariance failure) ma le repliche giornaliere collassano, il collasso è nella distribuzione sottostante (argmax + confidence template-driven), non un artefatto di caching.
+
+**Fase 2 — Decisione (soglie che cambiano la raccomandazione):**
+6. Se dopo ridisegno dell'elicitation **AUROC ≥ ~0.6** in modo stabile → l'agente ha segnale; adottare la nuova elicitation e valutare con AUROC + Brier decomposto + Sharpe del trading layer.
+7. Se **AUROC resta ≈ 0.5** con tutte le elicitation E le azioni non battono il base rate → l'agente non ha segnale discriminativo (ipotesi 1); il risultato pubblicabile è "no edge", e la confidence numerica va scartata come input al sizing.
+8. In ogni caso, **separare il trading layer dalla confidence dell'LLM** (position sizing deterministico, fractional Kelly, risk control fuori dal prompt), come raccomanda la letteratura trading: non far dipendere la size da un numero verbalizzato non-sharp.
+
+**Fase 3 — Reporting:**
+9. Riportare sia l'analisi pianificata (Brier) sia quella esplorativa (AUROC, decomposizione, A/B elicitation), etichettate come tali. Il collasso a 0.55 e a dispersione 0.0000 è di per sé un finding empirico riportabile su un modello Anthropic in un task a output vincolato.
+
+## Caveats
+- **Il valore mid-range (0.55) è meno documentato dell'ancoraggio verso l'alto.** La letteratura quantitativa sul clustering documenta soprattutto 90/95/100; non ho trovato un paper che documenti un modo a 0.5–0.55 con statistiche nominate. Quindi il vostro caso è parzialmente un finding nuovo, non solo l'istanza di un fenomeno noto — trattatelo come tale.
+- **Molti dei paper 2026 citati sono preprint arXiv molto recenti** (alcuni con ID datati 2026, coerenti con la data corrente) e alcuni non ancora peer-reviewed (es. "Always So Sure" su OpenReview, sotto review). Usarli come corroborazione, verificando i numeri sulla camera-ready.
+- **Non esiste un follow-up dedicato 2024–2026 che isoli Claude** nella verbalizzazione della confidence; l'evidenza Claude-specifica più solida resta Tian et al. (2023) su Claude-1/Claude-2, modelli ora deprecati. L'estrapolazione a un modello Anthropic 2026 è plausibile ma non provata.
+- **"Claude Fable 5" non è un modello che compare nella letteratura** che ho esaminato; le conclusioni si basano su proprietà generali degli LLM RLHF e sulla famiglia Claude storica, non su misurazioni di questo specifico modello. Le vostre stesse osservazioni (dispersione, 0.55) sono l'evidenza primaria per questo modello.
+- **ECE è fuorviante in condizione degenere** (un forecaster che dice sempre 50% ha ECE perfetto): non usatelo come criterio primario; privilegiate AUROC/discriminazione.
+- **AUROC richiede numerosità.** Con 6 decisioni/giorno × 20 giorni = 120 osservazioni, gli intervalli di confidenza su AUROC saranno ampi; interpretare le soglie (0.6) con cautela e riportare gli IC. Con una confidence letteralmente costante, l'AUROC sui valori attuali è indefinito/0.5 per costruzione: serve prima ripristinare varianza via elicitation.
