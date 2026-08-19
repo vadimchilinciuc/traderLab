@@ -20,9 +20,15 @@ Tre valgono da subito, perché riguardano azioni irreversibili:
 - **3.** `/clear` prima di ogni rito nuovo.
 - **4.** Un repo, un rito alla volta.
 
-Lo stato del programma vive in `zeroPipes/docs/program/`: `CODA.md` per le
-pendenze, `PROGRAM_LEDGER.md` per campagne ed esiti. Lo stato di questo repo
-vive in `DECISION_LOG.md`, append-only.
+Lo stato del programma vive in `zeroPipes/docs/program/` e **solo** lì:
+`REGOLE_CHAT_ZEROPIPE_v3.md` per le regole, `CODA.md` per le pendenze,
+`PROGRAM_LEDGER.md` per campagne ed esiti, `SPESE.md` per i costi. Questo repo
+**non li duplica: li punta**. Una copia locale invecchierebbe in silenzio e
+produrrebbe due verità divergenti sulla stessa pendenza; quando serve citarli,
+si cita il percorso in `zeroPipes`, non un estratto ricopiato qui.
+
+Lo stato di **questo** repo vive in `DECISION_LOG.md`, append-only: le
+decisioni strutturali del Lab, e nient'altro.
 
 I referti dei riti arrivano all'owner via file allegato o percorso su disco:
 i paste lunghi in chat arrivano vuoti (bug noto).
@@ -163,6 +169,30 @@ alle repliche dentro il contesto del modello.
 
 Gli sha del Freeze manifest si calcolano sul **file come sta su disco**, non
 sul testo ripulito: è il file che viene congelato.
+
+## Convenzione delle evidenze
+
+- Un documento di evidenza pre-registrata si chiama
+  `<data>_PREREG-EVIDENCE_<slug>`: data ISO (`AAAA-MM-GG`), il marcatore
+  `PREREG-EVIDENCE` in maiuscolo, uno slug breve. Il nome dice da solo che
+  l'evidenza è stata dichiarata **prima** di essere raccolta; senza quel
+  marcatore un documento è un'osservazione post-hoc, e vale meno.
+- I referti dei riti sono **gitignorati** (`REPORT_*.md`, `scratchpad/`): non
+  sopravvivono a un clone. Quindi un numero che sta in un referto e serve a un
+  documento tracciato **si trascrive per esteso**, con la sua unità e la sua
+  data, dentro il documento tracciato. Mai citarlo per solo rimando ("vedi il
+  referto del 18/08"): a chi clona il repo domani quel rimando punta al vuoto.
+- Vale anche fra repo: un numero prodotto qui e usato in `zeroPipes` si
+  trascrive lì, e viceversa.
+
+## Mandati registrati
+
+- La revisione indipendente del **§7 del `docs/PREREG_LAB_S0.md`** richiede un
+  dossier, e il dossier va commissionato a una **chat nuova e pulita** — non a
+  una chat che conosce gli esiti della stagione. Chi ha visto i risultati non
+  può giudicare in modo indipendente se i gate erano ben posti: rileggerebbe
+  la soglia sapendo da che parte è caduta. Il mandato è registrato in
+  `zeroPipes/docs/program/CODA.md`, §6 voce 6.
 
 ## Convenzioni di codice
 
