@@ -24,3 +24,7 @@ data/logs/*
 # Report e prompt di lavoro generati a mano/da rito: non fanno parte del track record.
 *_REPORT.md
 PROMPT_*.md
+REPORT_*.md
+
+# Materiale grezzo di lavoro (elicitation, script usa-e-getta, log di corsa).
+scratchpad/
