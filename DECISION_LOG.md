@@ -12,6 +12,7 @@ decisione che cambia si supera con una voce nuova, non si riscrive.
 | TL-005 | Lettura dichiarata del §5 (tetto token): LETTERALE | attiva |
 | TL-006 | Stagione 0 chiusa anticipatamente per allocazione di budget | attiva |
 | TL-007 | Pin su Claude Opus 5 · supera il pin di TL-002 | attiva |
+| TL-008 | `max_tokens` = 8.000 · supera i 32.000 dichiarati in TL-002 | attiva |
 
 ---
 
@@ -347,3 +348,57 @@ di token della giornata 2, cioè circa $98 per venti giornate. L'85% del costo �
 scrittura in cache e dipende da quanti prefissi distinti il modello genera, che
 varia col modello. Incertezza dichiarata ±20%; il primo giorno reale la
 corregge.
+
+---
+
+## TL-008 — `max_tokens` del Trader = 8.000: superamento formale dei 32.000
+
+- **Data**: 2026-08-19
+- **Stato**: attiva
+- **Decisa da**: l'owner.
+- **Supera**: la dichiarazione dei **32.000** contenuta nella tabella
+  «Conseguenze tecniche del modello» di **TL-002** (riga sul thinking che
+  consuma lo stesso `max_tokens` della risposta), registrata come divergenza
+  **D5** nell'audit del 19/08. TL-002 resta intatta e non si riscrive: questa
+  voce la **supera**, come TL-007 ha superato la Decisione 1 e come TL-002
+  aveva superato D2 di TL-001.
+
+**Contenuto**: il tetto di `max_tokens` del Trader è **8.000**, ed è il valore
+che la Stagione 0 ha **effettivamente** usato. Non è una modifica: è la
+registrazione formale di ciò che era già vero nel codice e nel manifest.
+
+**Le prove, entrambe committate.**
+
+| Fonte | Valore |
+| --- | --- |
+| `arena/config.py:50` — `DEFAULT_MAX_TOKENS` | `8_000` |
+| `manifests/trader_v0_freeze_manifest.json`, campo `max_tokens` | `8000` |
+
+**Perché il 32.000 non fu mai efficace.** Il commento di `arena/config.py`
+(rito `max_tokens`, diagnosi C) lo dichiara: con `max_tokens=32_000` la
+chiamata veniva **scartata dallo shedding lato server** nei picchi di carico
+(`overloaded` in-stream); con un budget ridotto la chiamata passa. Il tetto fu
+quindi portato a 8.000 **prima** che la stagione girasse. Le tre giornate di S0
+(16, 17, 18/08) sono girate tutte a 8.000: non esiste alcuna decisione del
+track record prodotta sotto un tetto di 32.000.
+
+Il rovescio della medaglia era ed è dichiarato in codice: un turno insolitamente
+lungo può troncare la risposta, e la guardia in `arena/runner.py` intercetta
+`stop_reason="max_tokens"` forzando NO TRADE (`MalformedReason.TRUNCATED`), mai
+un verbale parziale silenzioso.
+
+**Alternativa scartata: portare davvero il RUN2 a 32.000.**
+Scartata. Il RUN2 cambia già una variabile — il modello pinnato (TL-007). Alzare
+contemporaneamente il tetto dei token ne introdurrebbe una seconda, e qualunque
+differenza osservata fra i due segmenti diventerebbe non attribuibile. È
+esattamente ciò che i punti **A.1** e **A.3** del verbale RUN2 vietano: una
+variabile per volta.
+
+**Cosa questa voce NON afferma**: che 8.000 sia il tetto giusto per il modello
+di TL-007. È il tetto tarato su Fable e sul suo comportamento di shedding. Una
+eventuale ritaratura su `claude-opus-5` è una decisione a sé, da prendere fuori
+da un segmento di track record aperto e da registrare con voce propria.
+
+**Fonti**: verbale RUN2, punto **A.1**; audit del 19/08/2026, divergenza
+**D5**; foglio delle 27 decisioni del 19/08 (`zeroPipes`,
+`docs/program/2026-08-19_VERBALE_FOGLIO_DECISIONI.md`), **punto 19**.
