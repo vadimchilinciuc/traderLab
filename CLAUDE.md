@@ -197,6 +197,14 @@ sul testo ripulito: è il file che viene congelato.
   (`git cat-file`), mai su una copia del working tree; ogni file da ancorare
   nasce coperto da `.gitattributes` **prima** dello stamp.
 
+## Prima di una ricerca di letteratura
+
+- Prima di qualunque ricerca di letteratura, leggi
+  `docs/research/INDICE_RICERCHE.md`; se il tema è coperto o adiacente,
+  fermati e chiedi all'owner il file esistente invece di rifare la ricerca.
+- L'indice è append-only: una voce nuova si aggiunge in fondo, nessuna riga
+  esistente si riscrive, e una supersessione si dichiara in entrambe le righe.
+
 ## Mandati registrati
 
 - La revisione indipendente del **§7 del `docs/PREREG_LAB_S0.md`** richiede un
