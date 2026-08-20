@@ -96,6 +96,13 @@ un ripiego silenzioso:
    (D5). Il preventivo è `season_budget_usd`, valorizzato al rito del pin;
    **assente è a sua volta un rifiuto**, perché trattarlo come "nessun limite"
    trasformerebbe la dimenticanza di un campo in una stagione senza tetto.
+   Insieme al preventivo il runner pretende le giornate attese
+   (`season_expected_days`) e le **quattro voci di listino**
+   (`price_per_mtok_input`, `price_per_mtok_output`,
+   `price_per_mtok_cache_write_5m`, `price_per_mtok_cache_read`): senza
+   tariffe la spesa cumulata non è calcolabile, e un preventivo confrontato
+   con un numero che non si sa costruire non è una guardia. Il rifiuto elenca
+   **tutti** i campi mancanti in una volta.
 
 > **Prima del rito del pin le guardie 3 e 4 rifiutano sempre**, ed è corretto
 > così. Il manifest di Stagione 0 non ha né `pin_commit` né
@@ -423,11 +430,13 @@ Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
    `traderLab: stanotte NON partira' - <prima causa>`. Non tocca l'exit code
    del controllo, che resta determinato solo dal passo 1.
 3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei file elencati in
-   `DEFAULT_OTS_TARGETS` (`manifests/trader_v0_freeze_manifest.json`,
-   `docs/PREREG_LAB_S0.md`). `MANIFEST_S0.json`, che è il **terzo** file
-   timbrato del record di Stagione 0, **non è nell'elenco**: vedi il §8
-   punto 2 di
-   `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`. Via
+   `DEFAULT_OTS_TARGETS`, che sono i **tre** file timbrati del record di
+   Stagione 0: `manifests/trader_v0_freeze_manifest.json`,
+   `docs/PREREG_LAB_S0.md` e `MANIFEST_S0.json`. Il terzo è stato aggiunto il
+   20/08/2026: mancava, e la conseguenza si è misurata — il suo `.ots` era
+   rimasto pending su tutti e quattro i calendar mentre gli altri due erano
+   già confermati su Bitcoin (§8 punto 2 di
+   `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`). Via
    `scripts/ots_stamp.py upgrade`, con `TRADERLAB_ALLOW_NETWORK=1` iniettato
    **solo** in quel sottoprocesso — stessa disciplina di rete del passo dello
    snapshot nel rito quotidiano (`CLAUDE.md` §7). Non è mai bloccante: se i
@@ -441,10 +450,11 @@ Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
    `season_expected_days` **dello stesso manifest**). Oltre soglia è
    un'anomalia. Non tocca l'exit code: la soglia che **ferma** le cose è
    quella dura, `1,5 ×` il preventivo, e vive nel runner (§2). I termini sono
-   **due** e si firmano insieme al rito del pin: finché ne manca anche uno
-   solo il passo si **salta** con il motivo scritto nel log, e non produce
-   allarmi — un allarme che scatta ogni giorno per una condizione normale
-   insegna a ignorare il canale.
+   **sei** — `season_budget_usd`, `season_expected_days` e le quattro voci di
+   listino `price_per_mtok_*` — e si firmano insieme al rito del pin: finché
+   ne manca anche uno solo il passo si **salta** con il motivo scritto nel
+   log, e non produce allarmi — un allarme che scatta ogni giorno per una
+   condizione normale insegna a ignorare il canale.
 
    Le giornate attese stavano in una costante di `ledger/spend.py`
    (`SEASON_EXPECTED_DAYS = 42`) e ora sono un campo del manifest. Il motivo è
@@ -452,6 +462,19 @@ Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
    su 42, la soglia varrebbe `0,83 ×` la spesa attesa, cioè **sotto** di essa,
    e l'allarme suonerebbe ogni giorno di una stagione perfettamente in linea
    col proprio preventivo.
+
+   Il **listino** ha fatto la stessa strada, il 20/08/2026, per un motivo
+   speculare: erano quattro costanti dello stesso modulo, ferme ai prezzi di
+   Claude Fable 5 ($10 input / $50 output) mentre il modello pinnato era
+   diventato `claude-opus-5` ($5 / $25). Entrambe le guardie contavano quindi
+   la spesa al **doppio** del vero, e con il preventivo proposto di $89,90 la
+   soglia dura sarebbe scattata al giorno 21 invece che al 42. Una costante di
+   modulo non può accorgersi che il modello è cambiato; un campo del pin,
+   assente finché non lo si firma, sì. I prezzi in vigore sono trascritti nel
+   §4 di
+   `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`:
+   input $5 / MTok, output $25 / MTok, scrittura in cache a 5 minuti
+   $6,25 / MTok, lettura da cache $0,50 / MTok.
 
 ### Il canale d'allarme: `ALLARME_<data>.txt`
 
@@ -524,12 +547,20 @@ giornata toccata dal rito: data, esito (`completata` / `skipped_day` /
 `failed_decisions` / `nessuna`), per ogni asset le decisioni delle tre
 repliche con confidence e l'accordo tra loro (`3/3`, `2/3`, `1/3`), i token
 del giorno (input, output, letti e scritti in cache) con il costo stimato in
-USD sul listino di `claude-fable-5` (costanti commentate in cima al file,
-marcate `DA AGGIORNARE` — non seguono automaticamente il listino reale),
-l'esito di `verify()` sulla catena del ledger, e il conteggio delle giornate
+USD **al listino firmato nel Freeze manifest** (`--manifest`, per default
+quello di `arena.config.DEFAULT_MANIFEST_PATH`), l'esito di `verify()` sulla
+catena del ledger, e il conteggio delle giornate
 registrate sulla finestra del kill-criterion pre-registrato
 (`ledger/eprocess.py`, `window=20`). Gestisce con grazia il caso in cui non
 esista ancora nessuna giornata.
+
+Quando il manifest non porta il listino — la condizione normale finché il rito
+del pin non è avvenuto — la riga del costo dice `non calcolabile — listino
+assente dal Freeze manifest` invece di stampare una cifra. I token restano
+stampati: è da quelli che si ricava il costo il giorno in cui il listino c'è.
+Il rapporto **non** inventa una tariffa per riempire la riga, ed è esattamente
+il modo in cui il listino di Claude Fable 5 è sopravvissuto per due settimane
+al cambio del modello pinnato.
 
 ### Come leggerlo
 
@@ -550,7 +581,7 @@ cercare, in ordine:
 | `STOP: …` | La giornata di stanotte manca; segue il testo dell'avviso mostrato. |
 | `--- rapporto del mattino ---` | La giornata c'è: il rapporto sintetico segue, indentato. |
 | `ritmo di spesa: …` | Passo 4 (D5): la cumulata contro il pro-rata, oppure il motivo per cui il passo è stato saltato. |
-| `upgrade OTS …` | Solo il lunedì: esito del tentativo di upgrade per ciascuno dei due file. |
+| `upgrade OTS …` | Solo il lunedì: esito del tentativo di upgrade per ciascuno dei tre file. |
 | `ALLARME scritto in …` | Il canale d'allarme è scattato; le righe `motivo:` che seguono sono le stesse che finiscono nel file. |
 | `nessun allarme: …` | Nessun motivo rilevato: `ALLARME_<data>.txt` **non** viene creato. |
 

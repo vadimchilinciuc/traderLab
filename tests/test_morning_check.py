@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from arena.config import build_freeze_manifest
 from contracts.decision import Action
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from ledger.ops_ledger import OpsLedger
@@ -31,7 +30,7 @@ from scripts.morning_check import (
     run_morning_check,
 )
 from scripts.preflight import CheckResult, PreflightResult
-from tests.factories import make_decision
+from tests.factories import make_decision, manifest_con_prezzi
 
 OGGI = date(2026, 8, 17)  # un lunedi'
 SNAPSHOT_ID = "a" * 64
@@ -95,10 +94,14 @@ def scrivi_manifest(
 
     E' il documento che decide se una stagione e' ATTIVA: `pin_commit` vero
     significa stagione in corso, segnaposto o file assente significa cantiere
-    fermo. I due termini economici restano opzionali perche' molti test non
-    hanno niente a che vedere con il ritmo di spesa.
+    fermo. Preventivo e giornate attese restano opzionali perche' molti test
+    non hanno niente a che vedere con il ritmo di spesa; il **listino** c'e'
+    sempre, perche' e' anche quello che permette al rapporto del mattino di
+    stampare un costo invece di dichiararlo non calcolabile, e la sua assenza
+    e' provata dove serve (`tests/test_allarme_mattutino.py`,
+    `tests/test_morning_report.py`).
     """
-    manifest = build_freeze_manifest(
+    manifest = manifest_con_prezzi(
         dt.now(tz=timezone.utc),
         pin_commit=pin_commit,
         season_budget_usd=season_budget_usd,
@@ -352,18 +355,24 @@ def test_upgrade_ots_gira_solo_il_lunedi(percorsi):
     runner = FakeRunner(
         Completed(0, "stato: confermato su Bitcoin", ""),
         Completed(0, "stato: ancora pending, nessun aggiornamento", ""),
+        Completed(0, "stato: confermato su Bitcoin", ""),
     )
 
     esito = _controllo(percorsi, is_monday=True, runner=runner)
 
     assert esito.ots_attempted is True
-    assert len(runner.commands) == 2
+    # I file timbrati della Stagione 0 sono TRE, e tutti e tre vanno ritentati:
+    # `MANIFEST_S0.json` mancava da questa lista e il suo `.ots` era rimasto
+    # pending su tutti e quattro i calendar mentre gli altri due erano gia'
+    # confermati su Bitcoin.
+    assert len(runner.commands) == 3
     assert runner.commands[0][1].endswith("ots_stamp.py")
     assert runner.commands[0][2] == "upgrade"
     assert str(percorsi["repo_root"] / "manifests" / "trader_v0_freeze_manifest.json") in (
         runner.commands[0]
     )
     assert str(percorsi["repo_root"] / "docs" / "PREREG_LAB_S0.md") in runner.commands[1]
+    assert str(percorsi["repo_root"] / "MANIFEST_S0.json") in runner.commands[2]
     testo = esito.log_path.read_text(encoding="utf-8")
     assert "upgrade OTS" in testo
     assert "confermato su Bitcoin" in testo
@@ -383,7 +392,9 @@ def test_upgrade_ots_non_gira_fuori_dal_lunedi(percorsi):
 def test_la_rete_e_iniettata_solo_per_l_upgrade_ots(percorsi):
     ledger = TraderLedger(percorsi["ledger_path"])
     _scrivi_giornata(ledger, OGGI)
-    runner = FakeRunner(Completed(0, "", ""), Completed(0, "", ""))
+    runner = FakeRunner(
+        Completed(0, "", ""), Completed(0, "", ""), Completed(0, "", "")
+    )
 
     _controllo(percorsi, is_monday=True, runner=runner, env={"PATH": "x"})
 
@@ -398,6 +409,7 @@ def test_upgrade_ots_fallito_non_blocca_il_controllo(percorsi):
     _scrivi_giornata(ledger, OGGI)
     runner = FakeRunner(
         Completed(1, "", "ERRORE: calendar irraggiungibile"),
+        Completed(0, "stato: ancora pending", ""),
         Completed(0, "stato: ancora pending", ""),
     )
 
@@ -426,7 +438,9 @@ def test_upgrade_ots_che_solleva_non_blocca_il_controllo(percorsi):
 def test_upgrade_ots_e_la_giornata_mancante_convivono(percorsi):
     """Lunedi' senza verbali: sia l'avviso sia il tentativo di upgrade partono."""
     TraderLedger(percorsi["ledger_path"])
-    runner = FakeRunner(Completed(0, "", ""), Completed(0, "", ""))
+    runner = FakeRunner(
+        Completed(0, "", ""), Completed(0, "", ""), Completed(0, "", "")
+    )
     allarme = FakeAlert()
 
     esito = _controllo(percorsi, is_monday=True, runner=runner, alert=allarme)
@@ -434,7 +448,7 @@ def test_upgrade_ots_e_la_giornata_mancante_convivono(percorsi):
     assert esito.exit_code == EXIT_NO_VERBALI
     assert esito.ots_attempted is True
     assert len(allarme.messages) == 1
-    assert len(runner.commands) == 2
+    assert len(runner.commands) == 3
 
 
 # --------------------------------------------------------------------------

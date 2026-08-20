@@ -24,6 +24,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from contracts.freeze import FreezeManifest
 from ledger.trader_ledger import TraderLedger
 from toolserver.toollog import LLM_COMPLETE_TOOL
 
@@ -31,18 +32,68 @@ from toolserver.toollog import LLM_COMPLETE_TOOL
 # Listino
 # --------------------------------------------------------------------------
 
-# Prezzi di listino Claude Fable 5 (`claude-fable-5`), USD per milione di
-# token — dal listino Anthropic consultato al momento della stesura
-# (2026-08-14). DA AGGIORNARE se il listino cambia.
-FABLE_INPUT_USD_PER_MTOK = 10.00
-FABLE_OUTPUT_USD_PER_MTOK = 50.00
-# Scrittura in cache: 1.25x il prezzo input, TTL 5 minuti — è il default del
-# client (arena/llm_client.py, CACHE_CONTROL_EPHEMERAL non specifica un ttl
-# esplicito). DA AGGIORNARE se il listino o il TTL di default cambiano.
-FABLE_CACHE_WRITE_USD_PER_MTOK = FABLE_INPUT_USD_PER_MTOK * 1.25
-# Lettura dalla cache: 0.1x il prezzo input. DA AGGIORNARE se il listino
-# cambia.
-FABLE_CACHE_READ_USD_PER_MTOK = FABLE_INPUT_USD_PER_MTOK * 0.1
+# Il listino non sta più qui.
+#
+# Erano quattro costanti di modulo con i prezzi di Claude Fable 5 ($10 input,
+# $50 output). Il modello pinnato in TL-007 è però `claude-opus-5`, che costa
+# $5 e $25: le due guardie economiche contavano la spesa al **doppio** del
+# vero, e con il preventivo proposto di $89,90 la soglia dura sarebbe scattata
+# al giorno 21 invece che al 42 (evidenza
+# `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`, §8
+# punto 1). Una costante di modulo non ha modo di accorgersi che il modello è
+# cambiato: sopravvive al cambio di pin in silenzio, ed è esattamente quello
+# che ha fatto.
+#
+# I prezzi sono adesso **campi del Freeze manifest**, firmati insieme al
+# preventivo che da essi è stato calcolato. Vedi `contracts.freeze` e
+# `read_pricing`.
+
+#: I quattro campi del manifest che compongono il listino, nell'ordine in cui
+#: si dichiarano mancanti. Un solo elenco: chi aggiunge una voce di listino la
+#: aggiunge qui e la trova già pretesa dalla guardia.
+PRICE_FIELDS: tuple[str, ...] = (
+    "price_per_mtok_input",
+    "price_per_mtok_output",
+    "price_per_mtok_cache_write_5m",
+    "price_per_mtok_cache_read",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Pricing:
+    """Listino in USD per milione di token. Viene dal pin, non da qui.
+
+    Esiste come oggetto — invece di quattro parametri sciolti — perché le
+    quattro tariffe si usano sempre insieme e sempre tutte e quattro: passarne
+    tre su quattro non è un calcolo parziale, è un calcolo sbagliato.
+    """
+
+    input_usd_per_mtok: float
+    output_usd_per_mtok: float
+    cache_write_usd_per_mtok: float
+    cache_read_usd_per_mtok: float
+
+
+def read_pricing(manifest: FreezeManifest) -> tuple[Pricing | None, list[str]]:
+    """Il listino del pin, oppure i nomi dei campi che mancano.
+
+    Ritorna `(None, [campi mancanti])` se ne manca anche uno solo: un listino
+    a tre voci su quattro produrrebbe una spesa che sembra un numero ed è una
+    somma monca. Chi chiama traduce l'elenco in un rifiuto leggibile.
+    """
+    mancanti = [nome for nome in PRICE_FIELDS if getattr(manifest, nome) is None]
+    if mancanti:
+        return None, mancanti
+    return (
+        Pricing(
+            input_usd_per_mtok=manifest.price_per_mtok_input,  # type: ignore[arg-type]
+            output_usd_per_mtok=manifest.price_per_mtok_output,  # type: ignore[arg-type]
+            cache_write_usd_per_mtok=manifest.price_per_mtok_cache_write_5m,  # type: ignore[arg-type]
+            cache_read_usd_per_mtok=manifest.price_per_mtok_cache_read,  # type: ignore[arg-type]
+        ),
+        [],
+    )
+
 
 TOKEN_KEYS: tuple[str, ...] = (
     "input_tokens",
@@ -118,12 +169,20 @@ def estimate_cost_usd(
     output_tokens: int,
     cache_read_tokens: int,
     cache_creation_tokens: int,
+    *,
+    pricing: Pricing,
 ) -> float:
+    """Costo dei token al listino dato. `pricing` non ha default di proposito.
+
+    Un default qui sarebbe la costante di modulo che questo rito ha tolto,
+    rientrata dalla porta di servizio: chi non passa un listino non ottiene
+    una stima approssimativa, ottiene un errore.
+    """
     return (
-        input_tokens * FABLE_INPUT_USD_PER_MTOK
-        + output_tokens * FABLE_OUTPUT_USD_PER_MTOK
-        + cache_read_tokens * FABLE_CACHE_READ_USD_PER_MTOK
-        + cache_creation_tokens * FABLE_CACHE_WRITE_USD_PER_MTOK
+        input_tokens * pricing.input_usd_per_mtok
+        + output_tokens * pricing.output_usd_per_mtok
+        + cache_read_tokens * pricing.cache_read_usd_per_mtok
+        + cache_creation_tokens * pricing.cache_write_usd_per_mtok
     ) / 1_000_000.0
 
 
@@ -145,7 +204,9 @@ class SeasonSpend:
     usd: float
 
 
-def season_spend(*, trader_ledger: TraderLedger, toolcalls_dir: Path) -> SeasonSpend:
+def season_spend(
+    *, trader_ledger: TraderLedger, toolcalls_dir: Path, pricing: Pricing
+) -> SeasonSpend:
     """Somma la spesa di TUTTE le giornate presenti nel ledger dei verbali.
 
     Le giornate si contano dal ledger — è quello il registro della stagione — e
@@ -172,7 +233,9 @@ def season_spend(*, trader_ledger: TraderLedger, toolcalls_dir: Path) -> SeasonS
         output_tokens=output_t,
         cache_read_tokens=cache_read_t,
         cache_creation_tokens=cache_creation_t,
-        usd=estimate_cost_usd(input_t, output_t, cache_read_t, cache_creation_t),
+        usd=estimate_cost_usd(
+            input_t, output_t, cache_read_t, cache_creation_t, pricing=pricing
+        ),
     )
 
 
@@ -203,34 +266,50 @@ class TermsVerdict:
     ok: bool
     season_budget_usd: float | None
     season_expected_days: int | None
+    #: Il listino del pin, valorizzato solo quando `ok` è vero. È l'oggetto che
+    #: le due guardie useranno per contare: chi ha superato questo controllo lo
+    #: prende da qui e non lo ricava una seconda volta.
+    pricing: Pricing | None
     detail: str
 
 
-def check_season_terms(
-    season_budget_usd: float | None, season_expected_days: int | None
-) -> TermsVerdict:
-    """Il pin porta entrambi i termini economici? (D5)
+def check_season_terms(manifest: FreezeManifest) -> TermsVerdict:
+    """Il pin porta TUTTI i termini economici? (D5)
 
-    Sono due, e servono entrambi: `season_budget_usd` è il numeratore della
-    soglia dura e del pro-rata, `season_expected_days` è il denominatore del
-    pro-rata. Il runner in `--live` li pretende tutti e due prima di chiamare
-    il modello — un preventivo senza denominatore non è un preventivo, è metà
-    di una frazione.
+    Sono sei, e servono tutti: `season_budget_usd` è il numeratore della soglia
+    dura e del pro-rata, `season_expected_days` è il denominatore del pro-rata,
+    e le quattro voci di listino (`PRICE_FIELDS`) sono i fattori con cui la
+    spesa cumulata viene contata. Il runner in `--live` li pretende tutti prima
+    di chiamare il modello — un preventivo senza denominatore non è un
+    preventivo, è metà di una frazione, e un preventivo confrontato con una
+    spesa contata al listino sbagliato è peggio: sembra un controllo e non lo
+    è.
+
+    Il manifest arriva **intero** e non come valori sciolti: i sei termini si
+    firmano nello stesso documento e nella stessa passata, e separarli qui
+    riaprirebbe la possibilità che uno arrivi da un posto e uno da un altro —
+    che è esattamente il difetto da cui il listino veniva.
 
     Elenca **tutti** i campi mancanti, non solo il primo: chi legge il rifiuto
     deve poter valorizzarli in una passata sola invece di scoprirne uno per
     volta a ogni tentativo.
     """
+    season_budget_usd = manifest.season_budget_usd
+    season_expected_days = manifest.season_expected_days
+    pricing, prezzi_mancanti = read_pricing(manifest)
+
     mancanti: list[str] = []
     if season_budget_usd is None:
         mancanti.append("season_budget_usd")
     if season_expected_days is None:
         mancanti.append("season_expected_days")
+    mancanti.extend(prezzi_mancanti)
     if mancanti:
         return TermsVerdict(
             ok=False,
             season_budget_usd=season_budget_usd,
             season_expected_days=season_expected_days,
+            pricing=None,
             detail=(
                 f"termini economici assenti dal Freeze manifest: "
                 f"{', '.join(mancanti)}. Si valorizzano al rito del pin (D5): "
@@ -238,13 +317,17 @@ def check_season_terms(
                 f"giornata non parte."
             ),
         )
+    assert pricing is not None  # nessun campo mancante: read_pricing ha dato il listino
     return TermsVerdict(
         ok=True,
         season_budget_usd=season_budget_usd,
         season_expected_days=season_expected_days,
+        pricing=pricing,
         detail=(
             f"preventivo di stagione ${season_budget_usd:.2f} su "
-            f"{season_expected_days} giornate attese"
+            f"{season_expected_days} giornate attese, al listino "
+            f"${pricing.input_usd_per_mtok:g}/${pricing.output_usd_per_mtok:g} "
+            f"per Mtok (input/output)"
         ),
     )
 

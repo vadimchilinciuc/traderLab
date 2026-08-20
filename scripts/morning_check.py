@@ -30,18 +30,18 @@ Il controllo fa tre cose, indipendenti tra loro:
    causa"). Questo passo legge soltanto: non tocca né il ledger né gli exit
    code dichiarati in `EXIT_MEANING`, che restano determinati solo dalla
    giornata di stanotte (punto 1).
-3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
-   (`manifests/trader_v0_freeze_manifest.json`,
-   `docs/PREREG_LAB_S0.md`) tramite `scripts/ots_stamp.py upgrade`, iniettando
+3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei tre file timbrati
+   (`manifests/trader_v0_freeze_manifest.json`, `docs/PREREG_LAB_S0.md`,
+   `MANIFEST_S0.json`) tramite `scripts/ots_stamp.py upgrade`, iniettando
    `TRADERLAB_ALLOW_NETWORK=1` **solo** nel processo dell'upgrade — stessa
    disciplina di rete di `run_daily` per lo snapshot (CLAUDE.md §7). Non è mai
    bloccante: se i calendar non rispondono o l'attestazione non è pronta,
    l'esito finisce nel log e il controllo prosegue.
 4. **Verifica il ritmo di spesa della stagione** (D5): se la spesa cumulata
    supera `ALARM_MULTIPLIER` volte il pro-rata del preventivo, è un'anomalia.
-   Numeratore e denominatore del pro-rata vengono **entrambi** dal Freeze
-   manifest (`season_budget_usd`, `season_expected_days`): se ne manca uno il
-   passo si salta con il motivo scritto nel log. Non tocca l'exit code — la
+   Numeratore, denominatore e listino vengono **tutti** dal Freeze manifest
+   (`season_budget_usd`, `season_expected_days`, le quattro voci di prezzo):
+   se ne manca uno il passo si salta con il motivo scritto nel log. Non tocca l'exit code — la
    soglia che ferma le cose è quella dura, e vive nel runner.
 
 **Il canale d'allarme** (verbale RUN2 §A.6, decisione D3). Su exit ≠ 0 o su
@@ -72,7 +72,12 @@ from arena.config import DEFAULT_MANIFEST_PATH, ManifestError, load_pinned_manif
 from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH, RitualLog
 from contracts.freeze import FreezeManifest
 from ledger.ops_ledger import OpsLedger, recorded_days
-from ledger.spend import check_prorata_alarm, check_season_terms, season_spend
+from ledger.spend import (
+    check_prorata_alarm,
+    check_season_terms,
+    read_pricing,
+    season_spend,
+)
 from ledger.trader_ledger import TraderLedger
 from scripts.morning_report import generate_report
 from scripts.preflight import PreflightResult, format_table, run_preflight
@@ -95,9 +100,19 @@ EXIT_MEANING: dict[int, str] = {
 }
 
 DEFAULT_LOG_DIR = Path("data/logs")
+#: I file che l'upgrade settimanale ritenta di ancorare. Sono i **tre**
+#: timbri della Stagione 0, elencati in
+#: `docs/research/results/2026-08-20_PREREG-EVIDENCE_ANCORAGGI_OTS_S0.md`.
+#: `MANIFEST_S0.json` mancava, e la conseguenza si e' misurata: il 20/08 il suo
+#: `.ots` era ancora **pending su tutti e quattro i calendar** mentre gli altri
+#: due erano gia' confermati su Bitcoin: nessuno stava ritentando l'upgrade per
+#: lui. Un ancoraggio fuori da questa lista non e' meno timbrato, ma resta
+#: fermo alla ricevuta provvisoria finche' qualcuno non se ne ricorda a mano —
+#: ed e' la ricevuta definitiva a valere come prova.
 DEFAULT_OTS_TARGETS: tuple[Path, ...] = (
     Path("manifests/trader_v0_freeze_manifest.json"),
     Path("docs/PREREG_LAB_S0.md"),
+    Path("MANIFEST_S0.json"),
 )
 
 #: Nome del file d'allarme, alla radice del repo. Gitignorato (`ALLARME_*.txt`).
@@ -268,8 +283,15 @@ def run_morning_check(
 
     if day_found:
         log.write(f"giornata di stanotte ({today.isoformat()}) presente nel ledger")
+        # Il listino del rapporto viene dallo stesso manifest gia' caricato:
+        # senza pin (o senza listino nel pin) il rapporto stampa i token e
+        # dichiara il costo non calcolabile, invece di inventarsi una tariffa.
+        pricing_report, _ = read_pricing(manifest) if manifest else (None, [])
         report = generate_report(
-            trader_ledger=trader_ledger, ops_ledger=ops_ledger, toolcalls_dir=toolcalls_dir
+            trader_ledger=trader_ledger,
+            ops_ledger=ops_ledger,
+            toolcalls_dir=toolcalls_dir,
+            pricing=pricing_report,
         )
         log.block("rapporto del mattino", report)
         exit_code = EXIT_OK
@@ -435,8 +457,9 @@ def _check_budget_rhythm(
     """La stagione sta bruciando piu' in fretta del pro-rata? (D5)
 
     Ritorna `(None, motivo)` quando la domanda **non si pone**: manifest
-    assente o illeggibile, oppure senza uno dei due termini economici
-    (`season_budget_usd`, `season_expected_days`). Prima del rito del pin è la
+    assente o illeggibile, oppure senza uno dei termini economici
+    (`season_budget_usd`, `season_expected_days`, le quattro voci di listino).
+    Prima del rito del pin è la
     situazione normale, e trasformarla in un allarme quotidiano insegnerebbe
     all'owner a ignorare il file — che è il modo più efficace di disattivare
     un allarme senza spegnerlo.
@@ -452,14 +475,16 @@ def _check_budget_rhythm(
         log.write(f"ritmo di spesa: controllo saltato — {manifest_detail}")
         return None, manifest_detail
 
-    termini = check_season_terms(
-        manifest.season_budget_usd, manifest.season_expected_days
-    )
+    termini = check_season_terms(manifest)
     if not termini.ok:
         log.write(f"ritmo di spesa: controllo saltato — {termini.detail}")
         return None, termini.detail
 
-    spesa = season_spend(trader_ledger=trader_ledger, toolcalls_dir=toolcalls_dir)
+    pricing = termini.pricing
+    assert pricing is not None  # garantito da `termini.ok`
+    spesa = season_spend(
+        trader_ledger=trader_ledger, toolcalls_dir=toolcalls_dir, pricing=pricing
+    )
     verdetto = check_prorata_alarm(
         spesa,
         manifest.season_budget_usd,

@@ -124,6 +124,35 @@ class FreezeManifest(FrozenModel):
     # suona ogni giorno. Assente = nessun pro-rata firmato: il runner in
     # `--live` rifiuta, come per `season_budget_usd`.
     season_expected_days: int | None = Field(default=None, gt=0)
+    # Listino del modello pinnato, USD per milione di token, trascritto dalla
+    # pagina di listino al rito del pin. Stanno qui per la stessa ragione di
+    # `season_expected_days`: sono i **fattori** della spesa che il preventivo
+    # confronta con se stessa, e un preventivo calcolato con una tariffa e
+    # controllato con un'altra non controlla niente. Erano quattro costanti in
+    # `ledger/spend.py`, ferme al listino di Claude Fable 5 ($10/$50) mentre il
+    # modello pinnato in TL-007 e' `claude-opus-5` ($5/$25): entrambe le
+    # guardie economiche contavano la spesa al **doppio** del vero, e con il
+    # preventivo proposto di $89,90 la soglia dura sarebbe scattata al giorno
+    # 21 invece che al 42 (evidenza
+    # `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`,
+    # §8 punto 1).
+    #
+    # Entrano nel `freeze_id`, come il preventivo: cambiare il listino con cui
+    # una stagione si misura cambia la stagione. La conseguenza dichiarata e'
+    # che un ritocco di listino da parte del fornitore **non** si insegue a
+    # stagione aperta — il manifest e' firmato e timbrato — e le guardie
+    # continuano a contare con la tariffa con cui il preventivo e' stato
+    # calcolato. E' la scelta coerente: le due cifre confrontate restano
+    # omogenee.
+    #
+    # `cache_write_5m` e' il prezzo di scrittura in cache a TTL 5 minuti,
+    # perche' e' quello che il client usa: `arena/llm_client.py` non specifica
+    # `ttl` e il default e' 5 minuti. Un client che passasse a 1 ora userebbe
+    # un'altra riga di listino, e sarebbe un altro pin.
+    price_per_mtok_input: float | None = Field(default=None, gt=0.0)
+    price_per_mtok_output: float | None = Field(default=None, gt=0.0)
+    price_per_mtok_cache_write_5m: float | None = Field(default=None, gt=0.0)
+    price_per_mtok_cache_read: float | None = Field(default=None, gt=0.0)
 
     # --- Caching (RITO CACHING) ---
     # Descrizione dei blocchi marcati con `cache_control`. Solo costo e

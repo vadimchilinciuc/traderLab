@@ -105,15 +105,15 @@ def main() -> int:
             print(f"ERRORE: manifest non utilizzabile — {exc}", file=sys.stderr)
             return 2
 
-        # D5, primo passo: il pin porta ENTRAMBI i termini economici?
-        # `season_budget_usd` e `season_expected_days` si firmano insieme al
-        # rito del pin. Il secondo stava in una costante di `ledger/spend.py`
-        # e poteva divergere dal primo in silenzio: adesso e' un campo del
-        # manifest e la sua assenza e' un rifiuto, esattamente come per il
-        # preventivo.
-        termini = check_season_terms(
-            manifest.season_budget_usd, manifest.season_expected_days
-        )
+        # D5, primo passo: il pin porta TUTTI i termini economici?
+        # `season_budget_usd`, `season_expected_days` e le quattro voci di
+        # listino si firmano insieme al rito del pin. Le giornate attese
+        # stavano in una costante di `ledger/spend.py` e potevano divergere dal
+        # preventivo in silenzio; il listino ci stava ancora, fermo ai prezzi
+        # di Fable mentre il modello pinnato era Opus 5, e faceva contare la
+        # spesa al doppio. Adesso sono tutti campi del manifest e la loro
+        # assenza e' un rifiuto, esattamente come per il preventivo.
+        termini = check_season_terms(manifest)
         if not termini.ok:
             print(
                 f"ERRORE: guardia economica di stagione — {termini.detail}",
@@ -128,7 +128,11 @@ def main() -> int:
         toolcalls_dir = (
             Path(args.toolcalls_dir) if args.toolcalls_dir else paths.toolcall_log_dir
         )
-        spesa = season_spend(trader_ledger=ledger, toolcalls_dir=toolcalls_dir)
+        pricing = termini.pricing
+        assert pricing is not None  # garantito da `termini.ok`
+        spesa = season_spend(
+            trader_ledger=ledger, toolcalls_dir=toolcalls_dir, pricing=pricing
+        )
         verdetto = check_hard_stop(spesa, manifest.season_budget_usd)
         if not verdetto.ok:
             print(

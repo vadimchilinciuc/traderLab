@@ -23,29 +23,26 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from arena.config import DEFAULT_MANIFEST_PATH, ManifestError, load_pinned_manifest
 from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH
 from ledger.eprocess import KillCriterionConfig
 from ledger.ops_ledger import OpsEvent, OpsLedger, recorded_days
 from ledger.spend import (
-    FABLE_CACHE_READ_USD_PER_MTOK,
-    FABLE_CACHE_WRITE_USD_PER_MTOK,
-    FABLE_INPUT_USD_PER_MTOK,
-    FABLE_OUTPUT_USD_PER_MTOK,
+    Pricing,
     day_token_totals,
     estimate_cost_usd,
+    read_pricing,
 )
 from ledger.trader_ledger import TraderLedger
 from toolserver.config import ToolServerConfig
 
-# Il listino e la somma dei token vivono in `ledger/spend.py`: li leggono anche
-# le guardie economiche di stagione (D5), e due copie della stessa tariffa
-# divergono il giorno in cui una viene aggiornata e l'altra no. Qui si
-# re-importano per non rompere chi li cita da questo modulo.
+# Il listino non è più un dato di questo modulo né di `ledger/spend.py`: è un
+# campo del Freeze manifest, firmato al rito del pin insieme al preventivo che
+# da esso è stato calcolato. Il rapporto lo riceve da chi lo chiama; quando non
+# c'è, stampa i token e dichiara il costo non calcolabile — inventarsi una
+# tariffa per riempire la riga è il modo in cui il listino di Fable è
+# sopravvissuto al cambio di modello.
 __all__ = [
-    "FABLE_CACHE_READ_USD_PER_MTOK",
-    "FABLE_CACHE_WRITE_USD_PER_MTOK",
-    "FABLE_INPUT_USD_PER_MTOK",
-    "FABLE_OUTPUT_USD_PER_MTOK",
     "classify_outcome",
     "day_entries",
     "day_token_totals",
@@ -54,6 +51,8 @@ __all__ = [
     "generate_report",
     "last_touched_day",
     "latest_event_detail",
+    "pricing_from_manifest",
+    "read_pricing",
     "run_ids_for_day",
 ]
 
@@ -162,9 +161,16 @@ def generate_report(
     trader_ledger: TraderLedger,
     ops_ledger: OpsLedger,
     toolcalls_dir: Path,
+    pricing: Pricing | None = None,
     kill_window: int = KillCriterionConfig().window,
 ) -> str:
-    """Costruisce il testo del rapporto. Non stampa, non scrive: solo testo."""
+    """Costruisce il testo del rapporto. Non stampa, non scrive: solo testo.
+
+    `pricing` viene dal Freeze manifest. Assente — perché il pin non c'è
+    ancora, o perché non porta il listino — la riga del costo lo **dichiara**
+    invece di stimare a una tariffa qualsiasi: i token restano stampati, ed è
+    da quelli che si ricava il costo il giorno in cui il listino c'è.
+    """
     lines = ["RAPPORTO DEL MATTINO — traderLab"]
 
     day = last_touched_day(trader_ledger, ops_ledger)
@@ -190,10 +196,20 @@ def generate_report(
         "token (input/output/cache_read/cache_creation): "
         f"{input_t}/{output_t}/{cache_read_t}/{cache_creation_t}"
     )
-    lines.append(
-        "costo stimato USD     : "
-        f"${estimate_cost_usd(input_t, output_t, cache_read_t, cache_creation_t):.4f}"
-    )
+    if pricing is None:
+        lines.append(
+            "costo stimato USD     : non calcolabile — listino assente dal "
+            "Freeze manifest (si firma al rito del pin, D5)"
+        )
+    else:
+        costo = estimate_cost_usd(
+            input_t, output_t, cache_read_t, cache_creation_t, pricing=pricing
+        )
+        lines.append(
+            f"costo stimato USD     : ${costo:.4f} "
+            f"(listino ${pricing.input_usd_per_mtok:g}/"
+            f"${pricing.output_usd_per_mtok:g} per Mtok, input/output)"
+        )
 
     verify = trader_ledger.verify()
     lines.append(
@@ -206,11 +222,28 @@ def generate_report(
     return "\n".join(lines)
 
 
+def pricing_from_manifest(manifest_path: Path | str) -> Pricing | None:
+    """Il listino del pin, o `None` con il motivo taciuto: il rapporto non alza.
+
+    Il rapporto del mattino è di sola lettura e non deve fallire perché il pin
+    non c'è ancora — è la condizione normale del cantiere. Il manifest si
+    legge senza pretendere il pin (`require_pin=False`): serve il listino, non
+    l'autorizzazione a girare, e quella la pretende il runner.
+    """
+    try:
+        manifest = load_pinned_manifest(manifest_path, require_pin=False)
+    except ManifestError:
+        return None
+    pricing, _ = read_pricing(manifest)
+    return pricing
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", default=str(DEFAULT_LEDGER_PATH))
     parser.add_argument("--ops-ledger", default=str(DEFAULT_OPS_PATH))
     parser.add_argument("--toolcalls-dir", default=str(ToolServerConfig().toolcall_log_dir))
+    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH))
     args = parser.parse_args(argv)
 
     trader_ledger = TraderLedger(args.ledger)
@@ -219,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         trader_ledger=trader_ledger,
         ops_ledger=ops_ledger,
         toolcalls_dir=Path(args.toolcalls_dir),
+        pricing=pricing_from_manifest(args.manifest),
     )
     print(report)
     return 0

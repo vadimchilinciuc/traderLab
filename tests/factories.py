@@ -6,8 +6,10 @@ snapshot riproducibile byte-per-byte.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 
+from arena.config import build_freeze_manifest
 from contracts.decision import (
     Action,
     DecisionRecord,
@@ -25,10 +27,78 @@ from contracts.snapshot import (
     MarketSnapshot,
     OHLCVBar,
 )
+from ledger.spend import Pricing
 
 ASOF = datetime(2026, 8, 12, 0, 0, tzinfo=timezone.utc)
 SHA_A = "a" * 64
 SHA_B = "b" * 64
+
+#: Listino di `claude-opus-5` — il modello pinnato in TL-007 — in USD per
+#: milione di token. Trascritto dalla pagina ufficiale il 20/08/2026 ed
+#: elencato nel §4 di
+#: `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`:
+#: input $5, output $25, scrittura in cache a 5 minuti $6.25 (1,25x l'input),
+#: lettura da cache $0.50 (0,1x l'input). La scrittura è quella a **5 minuti**
+#: perché è il TTL di default del client; quella a 1 ora ($10) non si applica.
+#:
+#: I test lo scrivono qui e non se lo ricalcolano ciascuno: due copie della
+#: stessa tariffa divergono il giorno in cui una viene aggiornata e l'altra no,
+#: che è lo stesso difetto per cui il listino è uscito da `ledger/spend.py`.
+PREZZI_OPUS5: dict[str, float] = {
+    "price_per_mtok_input": 5.00,
+    "price_per_mtok_output": 25.00,
+    "price_per_mtok_cache_write_5m": 6.25,
+    "price_per_mtok_cache_read": 0.50,
+}
+
+def prezzi_senza(*campi: str) -> dict[str, float]:
+    """Il listino di opus-5 privato dei campi elencati.
+
+    Serve ai test che provano il **lato mancante**: un listino a tre voci su
+    quattro non è un conto approssimativo, è un conto che non si può fare, e
+    la guardia deve dirlo invece di sommare quello che ha.
+    """
+    sconosciuti = set(campi) - set(PREZZI_OPUS5)
+    if sconosciuti:
+        raise ValueError(f"campi di listino inesistenti: {sorted(sconosciuti)}")
+    return {k: v for k, v in PREZZI_OPUS5.items() if k not in campi}
+
+
+def manifest_con_prezzi(
+    pinned_at: datetime,
+    *,
+    pin_commit: str = "",
+    season_budget_usd: float | None = None,
+    season_expected_days: int | None = None,
+    prezzi: Mapping[str, float] = PREZZI_OPUS5,
+) -> FreezeManifest:
+    """Un manifest coi termini economici che gli si passano.
+
+    Le quattro voci di listino si nominano una per una invece di srotolare un
+    dizionario con `**`: un `**dict[str, float]` su una firma eterogenea non è
+    verificabile staticamente, e questi quattro campi sono precisamente quelli
+    che il rito ha tolto dal regno delle costanti implicite. Un campo assente
+    da `prezzi` arriva come `None`, cioè "non firmato".
+    """
+    return build_freeze_manifest(
+        pinned_at,
+        pin_commit=pin_commit,
+        season_budget_usd=season_budget_usd,
+        season_expected_days=season_expected_days,
+        price_per_mtok_input=prezzi.get("price_per_mtok_input"),
+        price_per_mtok_output=prezzi.get("price_per_mtok_output"),
+        price_per_mtok_cache_write_5m=prezzi.get("price_per_mtok_cache_write_5m"),
+        price_per_mtok_cache_read=prezzi.get("price_per_mtok_cache_read"),
+    )
+
+
+#: Lo stesso listino nella forma che le guardie economiche consumano.
+LISTINO_OPUS5 = Pricing(
+    input_usd_per_mtok=PREZZI_OPUS5["price_per_mtok_input"],
+    output_usd_per_mtok=PREZZI_OPUS5["price_per_mtok_output"],
+    cache_write_usd_per_mtok=PREZZI_OPUS5["price_per_mtok_cache_write_5m"],
+    cache_read_usd_per_mtok=PREZZI_OPUS5["price_per_mtok_cache_read"],
+)
 
 
 def make_bars(n: int, start_price: float, asof: datetime = ASOF) -> tuple[OHLCVBar, ...]:

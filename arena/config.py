@@ -279,6 +279,10 @@ def build_freeze_manifest(
     pin_commit: str = "",
     season_budget_usd: float | None = None,
     season_expected_days: int | None = None,
+    price_per_mtok_input: float | None = None,
+    price_per_mtok_output: float | None = None,
+    price_per_mtok_cache_write_5m: float | None = None,
+    price_per_mtok_cache_read: float | None = None,
     thinking_declared: ThinkingDeclaration = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED,
 ) -> FreezeManifest:
     """Compone il manifest dal contenuto realmente congelato.
@@ -295,11 +299,18 @@ def build_freeze_manifest(
     `budget_tokens` producono 400. Anche qui la policy si realizza omettendo il
     parametro.
 
-    `pin_commit`, `season_budget_usd` e `season_expected_days` restano vuoti
-    finché non li valorizza il **rito del pin**: sono i tre campi che
-    trasformano una composizione di prova in un pin di stagione. Un manifest
-    composto qui senza di loro è leggibile ma non fa girare niente — vedi
-    `load_pinned_manifest` e `ledger.spend.check_season_terms`.
+    `pin_commit`, `season_budget_usd`, `season_expected_days` e le quattro voci
+    di listino (`price_per_mtok_*`) restano vuoti finché non li valorizza il
+    **rito del pin**: sono i campi che trasformano una composizione di prova in
+    un pin di stagione. Un manifest composto qui senza di loro è leggibile ma
+    non fa girare niente — vedi `load_pinned_manifest` e
+    `ledger.spend.check_season_terms`.
+
+    Il listino sta nel manifest e non fra i default di questa funzione per la
+    stessa ragione per cui non sta più fra le costanti di `ledger/spend.py`: un
+    prezzo con un default sopravvive al cambio di modello senza che nessuno se
+    ne accorga, ed è precisamente quello che è successo fra TL-002 (Fable,
+    $10/$50) e TL-007 (Opus 5, $5/$25).
     """
     context = load_context(agent_dir)
     return FreezeManifest(
@@ -317,6 +328,10 @@ def build_freeze_manifest(
         pin_commit=pin_commit,
         season_budget_usd=season_budget_usd,
         season_expected_days=season_expected_days,
+        price_per_mtok_input=price_per_mtok_input,
+        price_per_mtok_output=price_per_mtok_output,
+        price_per_mtok_cache_write_5m=price_per_mtok_cache_write_5m,
+        price_per_mtok_cache_read=price_per_mtok_cache_read,
         caching_policy=caching_policy,
         ots_pending=True,
     )

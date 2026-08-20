@@ -14,16 +14,21 @@ li fa l'owner a mano (`docs/OPERATIONS.md`).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from arena.config import build_freeze_manifest
 from contracts.decision import Action
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from ledger.trader_ledger import LedgerKey, TraderLedger
 from scripts.morning_check import alarm_path_for, run_morning_check
 from scripts.preflight import CheckResult, PreflightResult
-from tests.factories import make_decision
+from tests.factories import (
+    PREZZI_OPUS5,
+    make_decision,
+    manifest_con_prezzi,
+    prezzi_senza,
+)
 from toolserver.toollog import LLM_COMPLETE_TOOL
 
 OGGI = date(2026, 8, 20)
@@ -67,13 +72,20 @@ def _scrivi_manifest(
     season_budget_usd: float | None = None,
     season_expected_days: int | None = None,
     pin_commit: str = PIN,
+    prezzi: Mapping[str, float] | None = None,
 ) -> Path:
-    """Un Freeze manifest su disco. `pin_commit` decide se la stagione e' attiva."""
-    manifest = build_freeze_manifest(
+    """Un Freeze manifest su disco. `pin_commit` decide se la stagione e' attiva.
+
+    Il listino c'e' per default (quello di `claude-opus-5`): quasi tutti questi
+    test provano il ritmo di spesa **dentro** una stagione, dove le tariffe
+    sono firmate. Chi prova il caso opposto passa `prezzi={}` esplicitamente.
+    """
+    manifest = manifest_con_prezzi(
         datetime.now(tz=timezone.utc),
         pin_commit=pin_commit,
         season_budget_usd=season_budget_usd,
         season_expected_days=season_expected_days,
+        prezzi=PREZZI_OPUS5 if prezzi is None else prezzi,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -232,10 +244,15 @@ def _giornata_costosa(tmp_path: Path, output_tokens: int) -> None:
 
 
 #: Costo di una giornata "tipo" in questi test: 1.000.000 token di output al
-#: listino dichiarato in `ledger/spend.py` fanno esattamente 50 USD. Chiamarlo
-#: `D` permette di scrivere le soglie come multipli di una giornata invece che
-#: come numeri magici.
-D_USD = 50.0
+#: listino di `claude-opus-5` firmato nel manifest ($25/Mtok) fanno esattamente
+#: 25 USD. Chiamarlo `D` permette di scrivere le soglie come multipli di una
+#: giornata invece che come numeri magici.
+#:
+#: Era 50 USD finché il listino viveva fra le costanti di `ledger/spend.py`
+#: con i prezzi di Fable ($50/Mtok in output). Il valore è cambiato perché è
+#: cambiato il modello pinnato, ed è esattamente il legame che una costante di
+#: modulo non poteva rappresentare.
+D_USD = 25.0
 TOKEN_PER_GIORNATA = 1_000_000
 
 
@@ -301,9 +318,11 @@ def test_allarme_sul_ritmo_di_spesa_e_silenzio_sotto_soglia(tmp_path):
 def test_senza_i_termini_economici_il_passo_si_salta_invece_di_allarmare(tmp_path):
     """D5: prima del rito del pin i termini non ci sono, ed è la normalità.
 
-    I termini sono **due** — `season_budget_usd` e `season_expected_days` — e
-    la mancanza di uno solo basta a rendere il pro-rata indefinito. In tutti e
-    tre i casi mancanti il passo si salta con il motivo scritto nel log:
+    I termini sono **sei** — `season_budget_usd`, `season_expected_days` e le
+    quattro voci di listino — e la mancanza di uno solo basta a rendere il
+    conto indefinito: senza denominatore non c'è pro-rata, senza tariffa non
+    c'è spesa da confrontargli. In tutti i casi mancanti il passo si salta con
+    il motivo scritto nel log:
     trasformarlo in un allarme quotidiano insegnerebbe all'owner a ignorare il
     file, che è il modo più efficace di disattivare un allarme senza
     spegnerlo. Il lato opposto: con entrambi i termini la domanda si pone e la
@@ -311,10 +330,26 @@ def test_senza_i_termini_economici_il_passo_si_salta_invece_di_allarmare(tmp_pat
     """
     _giornata_costosa(tmp_path, output_tokens=1_000)
 
-    incompleti = {
+    incompleti: dict[str, dict] = {
         "nessuno": {"season_budget_usd": None, "season_expected_days": None},
         "solo_giornate": {"season_budget_usd": None, "season_expected_days": 28},
         "solo_preventivo": {"season_budget_usd": 1_000.0, "season_expected_days": None},
+        # Preventivo e giornate ci sono entrambi, manca il **listino**: senza
+        # tariffe la spesa cumulata non è calcolabile, e una guardia che
+        # confronta un preventivo con un numero che non sa costruire non è una
+        # guardia. Anche questo è un passo saltato, non un allarme.
+        "senza_listino": {
+            "season_budget_usd": 1_000.0,
+            "season_expected_days": 28,
+            "prezzi": {},
+        },
+        # Listino a tre voci su quattro: manca la lettura da cache. Un conto
+        # parziale sembra un numero e non lo è.
+        "listino_monco": {
+            "season_budget_usd": 1_000.0,
+            "season_expected_days": 28,
+            "prezzi": prezzi_senza("price_per_mtok_cache_read"),
+        },
     }
     for nome, termini in incompleti.items():
         manifest = _scrivi_manifest(tmp_path / f"{nome}.json", **termini)

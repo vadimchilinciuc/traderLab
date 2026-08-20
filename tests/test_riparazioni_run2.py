@@ -12,6 +12,7 @@ Nessuna rete, nessuna API key, nessun modello: come tutta la suite.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -36,7 +37,11 @@ from arena.llm_client import (
 from arena.runner import DailyRunner, _to_params
 from arena.verbale import MalformedReason, is_true_malformed
 from contracts.decision import Action
-from contracts.freeze import PIN_COMMIT_PLACEHOLDERS, ThinkingDeclaration
+from contracts.freeze import (
+    PIN_COMMIT_PLACEHOLDERS,
+    FreezeManifest,
+    ThinkingDeclaration,
+)
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from contracts.snapshot import LiquidityEstimate
 from ledger.eprocess import KillCriterionConfig, KillVerdict, evaluate_kill_criterion
@@ -50,6 +55,8 @@ from ledger.ops_ledger import (
 from ledger.spend import (
     ALARM_MULTIPLIER,
     HARD_STOP_MULTIPLIER,
+    PRICE_FIELDS,
+    Pricing,
     SeasonSpend,
     check_hard_stop,
     check_prorata_alarm,
@@ -60,7 +67,15 @@ from ledger.spend import (
 )
 from ledger.telemetry import DailyDispersion, daily_dispersion
 from ledger.trader_ledger import LedgerKey, TraderLedger
-from tests.factories import ASOF, make_decision, make_snapshot
+from tests.factories import (
+    ASOF,
+    LISTINO_OPUS5,
+    PREZZI_OPUS5,
+    make_decision,
+    make_snapshot,
+    manifest_con_prezzi,
+    prezzi_senza,
+)
 from toolserver.registry import ToolRegistry
 from toolserver.snapshot_builder import DECLARED_DEPTH_USD, SnapshotBuilder
 from toolserver.store import SnapshotStore
@@ -763,31 +778,113 @@ def test_a_zero_giornate_non_c_e_ritmo_e_a_una_giornata_c_e():
     assert not una.ok
 
 
-def test_i_termini_economici_ci_sono_entrambi_o_e_un_rifiuto():
-    """D5: `season_budget_usd` e `season_expected_days` si firmano insieme.
+def _manifest_economico(
+    *,
+    season_budget_usd: float | None = 350.0,
+    season_expected_days: int | None = 28,
+    prezzi: Mapping[str, float] | None = None,
+) -> FreezeManifest:
+    """Un manifest con i termini economici che gli si passano."""
+    return manifest_con_prezzi(
+        datetime.now(tz=timezone.utc),
+        pin_commit=PIN,
+        season_budget_usd=season_budget_usd,
+        season_expected_days=season_expected_days,
+        prezzi=PREZZI_OPUS5 if prezzi is None else prezzi,
+    )
 
-    I due lati: entrambi presenti → si gira; uno qualsiasi assente → rifiuto,
-    con il nome del campo mancante dentro il motivo. Il rifiuto elenca
+
+def test_i_termini_economici_ci_sono_tutti_o_e_un_rifiuto():
+    """D5: i sei termini economici si firmano insieme, nello stesso manifest.
+
+    Sono `season_budget_usd`, `season_expected_days` e le quattro voci di
+    listino. I due lati: tutti presenti → si gira; uno qualsiasi assente →
+    rifiuto, con il nome del campo mancante dentro il motivo. Il rifiuto elenca
     **tutti** i campi mancanti, non solo il primo, perche' chi lo legge deve
     poterli valorizzare in una passata sola.
+
+    Il listino entra in questo controllo per un difetto misurato: stava fra le
+    costanti di `ledger/spend.py` coi prezzi di Fable ($10/$50) mentre il
+    modello pinnato era `claude-opus-5` ($5/$25), e le guardie contavano la
+    spesa al doppio. Una costante non puo' accorgersi che il modello e'
+    cambiato; un campo del pin, assente finche' non lo si firma, si'.
     """
-    completo = check_season_terms(350.0, 28)
+    completo = check_season_terms(_manifest_economico())
     assert completo.ok
     assert "350.00" in completo.detail and "28" in completo.detail
+    assert completo.pricing == LISTINO_OPUS5
 
-    senza_preventivo = check_season_terms(None, 28)
+    senza_preventivo = check_season_terms(
+        _manifest_economico(season_budget_usd=None)
+    )
     assert not senza_preventivo.ok
     assert "season_budget_usd" in senza_preventivo.detail
     assert "season_expected_days" not in senza_preventivo.detail
+    assert senza_preventivo.pricing is None
 
-    senza_giornate = check_season_terms(350.0, None)
+    senza_giornate = check_season_terms(
+        _manifest_economico(season_expected_days=None)
+    )
     assert not senza_giornate.ok
     assert "season_expected_days" in senza_giornate.detail
 
-    senza_niente = check_season_terms(None, None)
+    senza_niente = check_season_terms(
+        _manifest_economico(season_budget_usd=None, season_expected_days=None)
+    )
     assert not senza_niente.ok
     assert "season_budget_usd" in senza_niente.detail
     assert "season_expected_days" in senza_niente.detail
+
+    # Il listino: assente del tutto, e assente per una voce sola.
+    senza_listino = check_season_terms(_manifest_economico(prezzi={}))
+    assert not senza_listino.ok
+    assert senza_listino.pricing is None
+    for campo in PRICE_FIELDS:
+        assert campo in senza_listino.detail
+
+    monco = check_season_terms(
+        _manifest_economico(prezzi=prezzi_senza("price_per_mtok_cache_write_5m"))
+    )
+    assert not monco.ok
+    assert "price_per_mtok_cache_write_5m" in monco.detail
+    assert "price_per_mtok_input" not in monco.detail
+
+
+def test_il_listino_del_pin_e_quello_di_opus_5_e_conta_la_meta_di_fable():
+    """Il conto cambia col listino, ed e' il punto dell'intera riparazione.
+
+    1M di token per ciascuna delle quattro voci. Al listino di `claude-opus-5`
+    (§4 dell'evidenza del preventivo del 20/08) valgono $36.75; al listino di
+    Fable che `ledger/spend.py` portava ancora, $73.50 — **il doppio**. Con il
+    preventivo proposto di $89,90 su 28 giornate, la soglia dura di 1,5x
+    ($134,85) si tocca al giorno 42 col listino giusto e al giorno **21** con
+    quello sbagliato: la stagione si sarebbe fermata a meta' credendo di aver
+    speso il doppio di quanto aveva speso.
+    """
+    opus = estimate_cost_usd(
+        1_000_000, 1_000_000, 1_000_000, 1_000_000, pricing=LISTINO_OPUS5
+    )
+    assert opus == pytest.approx(5.00 + 25.00 + 0.50 + 6.25)
+
+    fable = Pricing(
+        input_usd_per_mtok=10.00,
+        output_usd_per_mtok=50.00,
+        cache_write_usd_per_mtok=12.50,
+        cache_read_usd_per_mtok=1.00,
+    )
+    assert estimate_cost_usd(
+        1_000_000, 1_000_000, 1_000_000, 1_000_000, pricing=fable
+    ) == pytest.approx(2 * opus)
+
+    # I due giorni in cui la soglia dura scatta, con lo stesso preventivo e la
+    # stessa spesa giornaliera VERA. Preventivo dell'evidenza del 20/08:
+    # $89,90 su 28 giornate, cioe' $3,2107 al giorno nello scenario caldo.
+    preventivo, giornaliero_vero = 89.90, 3.2107
+    soglia = preventivo * HARD_STOP_MULTIPLIER
+    giorno_giusto = soglia / giornaliero_vero
+    giorno_sbagliato = soglia / (2 * giornaliero_vero)
+    assert round(giorno_giusto) == 42
+    assert round(giorno_sbagliato) == 21
 
 
 def test_il_manifest_porta_le_giornate_attese_e_le_lascia_assenti_di_default():
@@ -850,15 +947,25 @@ def test_la_spesa_di_stagione_somma_i_run_id_del_ledger(tmp_path):
             encoding="utf-8",
         )
 
-    con_log = season_spend(trader_ledger=ledger, toolcalls_dir=toolcalls)
+    con_log = season_spend(
+        trader_ledger=ledger, toolcalls_dir=toolcalls, pricing=LISTINO_OPUS5
+    )
     assert con_log.days_executed == 2
     assert set(con_log.run_ids) == {"run-a", "run-b"}
-    assert con_log.usd == pytest.approx(estimate_cost_usd(2_000_000, 0, 0, 0))
+    assert con_log.usd == pytest.approx(
+        estimate_cost_usd(2_000_000, 0, 0, 0, pricing=LISTINO_OPUS5)
+    )
+    # 2M token di input a $5/Mtok: la cifra si legge, non si ricava.
+    assert con_log.usd == pytest.approx(10.00)
 
     # Lato opposto: il log delle tool call è gitignorato e un clone pulito non
     # ce l'ha. Le giornate restano contate, la spesa scende a zero — ed è per
     # questo che `run_ids` viaggia nel risultato: la cifra è un minimo.
-    senza_log = season_spend(trader_ledger=ledger, toolcalls_dir=tmp_path / "assente")
+    senza_log = season_spend(
+        trader_ledger=ledger,
+        toolcalls_dir=tmp_path / "assente",
+        pricing=LISTINO_OPUS5,
+    )
     assert senza_log.days_executed == 2
     assert senza_log.usd == pytest.approx(0.0)
 

@@ -477,3 +477,78 @@ file da ancorare nasce coperto da `.gitattributes` **prima** dello stamp, e
 nasce in `docs/` o in `manifests/`, mai nella radice del repo — la radice non
 è coperta da `-text`, ed è esattamente lì che stava `MANIFEST_S0.json` quando
 il caso si è prodotto.
+
+---
+
+## TL-010 — Il listino esce dalle costanti ed entra nel pin
+
+- **Data**: 2026-08-20
+- **Stato**: attiva
+- **Decisa da**: l'owner (Sanji), 20/08/2026, nel prompt del rito T3, passo 0.
+- **Supera**: nulla di dichiarato. Corregge un difetto di attuazione di **D5**
+  (guardie economiche di stagione): la decisione D5 non aveva mai detto da
+  dove i prezzi dovessero venire, e l'implementazione li aveva messi fra le
+  costanti di `ledger/spend.py`.
+
+**Contenuto**: i quattro prezzi con cui la spesa di stagione viene contata —
+input, output, scrittura in cache a 5 minuti, lettura da cache — non sono più
+costanti di modulo. Sono **campi del Freeze manifest**
+(`price_per_mtok_input`, `price_per_mtok_output`,
+`price_per_mtok_cache_write_5m`, `price_per_mtok_cache_read`), con default
+`None`, che entrano nel calcolo del `freeze_id` ed è il **rito del pin** a
+valorizzare. Il runner in `--live` rifiuta di girare se ne manca anche uno
+solo, elencando in una volta tutti i campi mancanti, esattamente come già
+faceva per `season_budget_usd` e `season_expected_days`.
+
+**Il difetto che l'ha resa necessaria, con i numeri.** Le costanti portavano
+il listino di **Claude Fable 5** — $10 / MTok in input, $50 in output — fissato
+al pin TL-002 del 14/08. Il pin **TL-007** del 18/08 ha cambiato modello a
+`claude-opus-5`, che costa **$5 e $25**: metà. Le costanti non se ne sono
+accorte, perché una costante di modulo non ha modo di sapere quale modello è
+pinnato. Entrambe le guardie economiche contavano quindi la spesa al **doppio**
+del vero. Con il preventivo di stagione proposto per il RUN2 — $89,90 su 28
+giornate, soglia dura `1,5 ×` = $134,85 — la soglia sarebbe scattata al
+**giorno 21** invece che al giorno **42**: la stagione si sarebbe fermata a
+metà credendo di aver speso il doppio di quanto aveva speso. Il difetto era
+nella direzione prudente, ma un preventivo di $89,90 che si comporta come uno
+di $44,95 non è un preventivo prudente: è un preventivo diverso da quello
+firmato.
+
+**I prezzi in vigore**, trascritti qui per esteso perché questa voce deve
+reggere da sola. Riga «Claude Opus 5» della pagina di listino ufficiale
+(`https://platform.claude.com/docs/en/about-claude/pricing`), letta il
+**2026-08-20**:
+
+| Voce | Prezzo (USD / MTok) | Campo del manifest |
+| --- | ---: | --- |
+| Base Input Tokens | **5,00** | `price_per_mtok_input` |
+| Output Tokens | **25,00** | `price_per_mtok_output` |
+| 5m Cache Writes | **6,25** | `price_per_mtok_cache_write_5m` |
+| Cache Hits & Refreshes | **0,50** | `price_per_mtok_cache_read` |
+
+La scrittura in cache è quella a **5 minuti** e non quella a 1 ora ($10 /
+MTok) perché il client (`arena/llm_client.py`) non specifica `ttl` e il default
+è 5 minuti. Un client che passasse a 1 ora userebbe un'altra riga di listino,
+e sarebbe un altro pin. Metodo e misure stanno nel §4 di
+`docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`; il
+difetto era già dichiarato nel §8 punto 1 dello stesso documento.
+
+**La conseguenza dichiarata.** I prezzi entrano nel `freeze_id`, come già vi
+entrava il preventivo. Un ritocco di listino da parte del fornitore **non** si
+insegue quindi a stagione aperta — il manifest è firmato e timbrato — e le
+guardie continuano a contare con le tariffe con cui il preventivo fu
+calcolato. È la scelta coerente: le due cifre confrontate restano omogenee, e
+una guardia che cambia unità di misura a metà stagione non misura più niente.
+
+**Cosa questa voce NON afferma**: che la spesa storicamente registrata fosse
+sbagliata. I token consumati sono quelli, e sono nel log delle tool call; era
+sbagliata la loro **conversione in dollari**. Le tre giornate di Stagione 0
+girarono davvero su `claude-fable-5` e il loro costo al listino Fable è
+corretto: $13,89, $9,80 e $13,90 (trascritti dal §5.6 dell'evidenza citata).
+
+**Effetto collaterale visibile.** Il rapporto del mattino
+(`scripts/morning_report.py`) non stampa più un costo quando il manifest non
+porta il listino: scrive `non calcolabile — listino assente dal Freeze
+manifest` e lascia i token. Finché il rito del pin del RUN2 non è avvenuto,
+questa è la riga che si vedrà, ed è corretta — la riga precedente era una
+cifra calcolata al listino di un modello diverso da quello pinnato.

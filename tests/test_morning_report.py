@@ -7,7 +7,9 @@ in `tmp_path`.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +17,7 @@ from contracts.decision import Action
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from ledger.eprocess import KillCriterionConfig
 from ledger.ops_ledger import OpsEvent, OpsKey, OpsLedger
+from ledger.spend import Pricing
 from ledger.trader_ledger import LedgerKey, TraderLedger
 from scripts.morning_report import (
     classify_outcome,
@@ -22,9 +25,15 @@ from scripts.morning_report import (
     estimate_cost_usd,
     generate_report,
     last_touched_day,
+    pricing_from_manifest,
     run_ids_for_day,
 )
-from tests.factories import make_decision
+from tests.factories import (
+    LISTINO_OPUS5,
+    PREZZI_OPUS5,
+    make_decision,
+    manifest_con_prezzi,
+)
 
 OGGI = date(2026, 8, 14)
 ASOF = datetime(2026, 8, 14, 0, 0, tzinfo=timezone.utc)
@@ -54,6 +63,32 @@ def percorsi(tmp_path):
         "ops": tmp_path / "ledger" / "ops.jsonl",
         "toolcalls": tmp_path / "toolcalls",
     }
+
+
+def _scrivi_manifest_su_disco(path: Path, *, prezzi: Mapping[str, float]) -> Path:
+    """Un Freeze manifest committabile, col listino che gli si passa.
+
+    Non e' pinnato di proposito: `pricing_from_manifest` legge il listino, non
+    l'autorizzazione a far girare una giornata, e quella la pretende il runner.
+    """
+    manifest = manifest_con_prezzi(datetime.now(tz=timezone.utc), prezzi=prezzi)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "freeze_manifest": manifest.canonical_payload(),
+                "freeze_id": manifest.freeze_id,
+                "rito_config": {"nota": "documento sintetico per i test"},
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _scrivi_decisione(
@@ -163,7 +198,10 @@ def test_nessuna_giornata_ancora(percorsi):
     assert last_touched_day(ledger, ops) is None
 
     report = generate_report(
-        trader_ledger=ledger, ops_ledger=ops, toolcalls_dir=percorsi["toolcalls"]
+        trader_ledger=ledger,
+        ops_ledger=ops,
+        toolcalls_dir=percorsi["toolcalls"],
+        pricing=LISTINO_OPUS5,
     )
     assert "nessuna giornata ancora" in report
     assert "esito                 : nessuna" in report
@@ -331,10 +369,83 @@ def test_somma_token_dal_log_delle_tool_call(percorsi):
     assert "token (input/output/cache_read/cache_creation): 2000/400/1000/200" in report
 
 
-def test_costo_stimato_usa_il_listino_fable(percorsi):
-    # 1M input, 1M output, 1M cache_read, 1M cache_creation.
-    costo = estimate_cost_usd(1_000_000, 1_000_000, 1_000_000, 1_000_000)
-    assert costo == pytest.approx(10.00 + 50.00 + 1.00 + 12.50)
+def test_costo_stimato_usa_il_listino_del_pin(percorsi):
+    """Il costo si calcola col listino firmato, non con una costante di modulo.
+
+    1M di token per ciascuna delle quattro voci, al listino di `claude-opus-5`
+    del §4 dell'evidenza del preventivo: $5 input + $25 output + $0.50 lettura
+    da cache + $6.25 scrittura a 5 minuti = **$36.75**.
+
+    Al listino di Fable che stava in `ledger/spend.py` — e che restava lì anche
+    dopo il cambio di modello — gli stessi token davano $73.50: **il doppio**.
+    Con un preventivo di stagione di $89,90 la soglia dura si sarebbe toccata
+    al giorno 21 invece che al 42.
+    """
+    costo = estimate_cost_usd(
+        1_000_000, 1_000_000, 1_000_000, 1_000_000, pricing=LISTINO_OPUS5
+    )
+    assert costo == pytest.approx(5.00 + 25.00 + 0.50 + 6.25)
+    assert costo == pytest.approx(36.75)
+
+    # Il lato opposto, e la ragione del rito: lo stesso conto al listino di
+    # Fable vale esattamente il doppio.
+    fable = Pricing(
+        input_usd_per_mtok=10.00,
+        output_usd_per_mtok=50.00,
+        cache_write_usd_per_mtok=12.50,
+        cache_read_usd_per_mtok=1.00,
+    )
+    assert estimate_cost_usd(
+        1_000_000, 1_000_000, 1_000_000, 1_000_000, pricing=fable
+    ) == pytest.approx(2 * costo)
+
+
+def test_senza_listino_il_costo_e_dichiarato_non_calcolabile(percorsi):
+    """Nessuna tariffa inventata per riempire la riga.
+
+    Prima del rito del pin il manifest non porta il listino. Stampare un costo
+    lo stesso richiederebbe una tariffa presa da qualche parte, e "qualche
+    parte" è stata per due settimane il listino di un modello diverso da quello
+    pinnato. I token restano stampati: è da quelli che si ricava il costo il
+    giorno in cui il listino c'è.
+    """
+    ledger = TraderLedger(percorsi["ledger"])
+    ops = OpsLedger(percorsi["ops"])
+
+    report = generate_report(
+        trader_ledger=ledger, ops_ledger=ops, toolcalls_dir=percorsi["toolcalls"]
+    )
+    assert "costo stimato USD     : non calcolabile" in report
+    assert "listino assente dal Freeze manifest" in report
+    assert "token (input/output/cache_read/cache_creation): 0/0/0/0" in report
+
+    # Lato opposto: col listino la riga porta una cifra.
+    con_listino = generate_report(
+        trader_ledger=ledger,
+        ops_ledger=ops,
+        toolcalls_dir=percorsi["toolcalls"],
+        pricing=LISTINO_OPUS5,
+    )
+    assert "costo stimato USD     : $0.0000" in con_listino
+
+
+def test_il_listino_del_rapporto_viene_dal_manifest_su_disco(tmp_path):
+    """`pricing_from_manifest`: i tre casi, e nessuno di essi solleva.
+
+    Il rapporto del mattino è di sola lettura e non deve fallire perché il pin
+    non c'è ancora — è la condizione normale del cantiere.
+    """
+    # 1. File assente.
+    assert pricing_from_manifest(tmp_path / "non_esiste.json") is None
+
+    # 2. Manifest valido ma senza listino (composizione di prova).
+    senza = _scrivi_manifest_su_disco(tmp_path / "senza.json", prezzi={})
+    assert pricing_from_manifest(senza) is None
+
+    # 3. Manifest col listino firmato: le quattro tariffe arrivano intatte.
+    con = _scrivi_manifest_su_disco(tmp_path / "con.json", prezzi=PREZZI_OPUS5)
+    listino = pricing_from_manifest(con)
+    assert listino == LISTINO_OPUS5
 
 
 def test_campo_di_telemetria_assente_conta_zero(percorsi):
