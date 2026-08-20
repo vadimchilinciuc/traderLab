@@ -35,6 +35,22 @@ from contracts.vocabulary import FEATURE_NAMES, MAX_FEATURES_USED
 
 SUBMIT_TOOL_NAME = "submit_decision"
 
+
+def _descrizione_features_used(tetto: int) -> str:
+    """La riga che dichiara il tetto di `features_used` dentro lo schema.
+
+    Il numero è un **parametro**, non una costante scritta nel testo: chi
+    aggiunge una primitiva al vocabolario alza il tetto e la descrizione lo
+    segue, senza che nessuno debba ricordarsene. È la seconda proiezione
+    della stessa fonte di verità che il contratto applica (F12-bis).
+    """
+    return (
+        "Grandezze del vocabolario primitivo che hanno determinato "
+        "questa decisione, con il valore letto. "
+        f"Al più {tetto} voci, con nomi distinti."
+    )
+
+
 SUBMIT_DECISION_SCHEMA: dict[str, Any] = {
     "name": SUBMIT_TOOL_NAME,
     "description": (
@@ -83,19 +99,21 @@ SUBMIT_DECISION_SCHEMA: dict[str, Any] = {
             },
             "features_used": {
                 "type": "array",
-                # `maxItems` DERIVATO dallo stesso numero che il contratto
-                # applica (`contracts.decision`, `MAX_FEATURES_USED`). Firma
-                # **F12**: lo schema dichiara esattamente ciò che il contratto
-                # respinge, né più né meno. Prima del 2026-08-20 non dichiarava
-                # alcun tetto mentre il contratto ne applicava uno più basso
-                # del vocabolario, e il verbale veniva rifiutato per un limite
-                # illeggibile da chi lo scriveva.
-                "maxItems": MAX_FEATURES_USED,
-                "description": (
-                    "Grandezze del vocabolario primitivo che hanno determinato "
-                    "questa decisione, con il valore letto. "
-                    f"Al più {MAX_FEATURES_USED} voci, con nomi distinti."
-                ),
+                # Il tetto è DICHIARATO qui in una sola sede: la riga di
+                # descrizione, generata alla costruzione dello schema da
+                # `MAX_FEATURES_USED` (= `len(PRIMITIVE_FEATURES)`), mai
+                # scritta a mano. Firma **F12-bis** (owner, 2026-08-20), che
+                # supersede F12(b): quella prescriveva `maxItems`, e la sua
+                # premessa è falsificata dall'endpoint — sotto `strict: true`
+                # l'API rifiuta `maxItems` su un array con 400 («For 'array'
+                # type, property 'maxItems' is not supported»), mentre lo
+                # accetta senza `strict` e accetta `minItems` con `strict`.
+                # `strict: true` non è negoziabile (CLAUDE.md §8), quindi
+                # cade `maxItems`, non lo strict. Il tetto resta APPLICATO dal
+                # contratto (`contracts.decision`, F12(a) intatta): una sola
+                # fonte di verità, due proiezioni — il contratto la applica,
+                # la descrizione la rende conoscibile dove si decide.
+                "description": _descrizione_features_used(MAX_FEATURES_USED),
                 "items": {
                     "type": "object",
                     "properties": {

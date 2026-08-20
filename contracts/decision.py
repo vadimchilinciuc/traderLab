@@ -89,7 +89,11 @@ class DecisionRecord(FrozenModel):
     # quindi due verbali rifiutati per un limite che il Trader non aveva
     # modo di leggere. Un vincolo che respinge deve essere conoscibile dove
     # si decide: il tetto è ora lo stesso numero nelle due sedi, e lo
-    # schema lo dichiara (`arena/verbale.py`, `maxItems`).
+    # schema lo dichiara nella riga di descrizione di `features_used`
+    # (`arena/verbale.py`, `_descrizione_features_used`), generata da questa
+    # stessa costante. La forma `maxItems`, che F12(b) prescriveva, è caduta
+    # con la firma **F12-bis** dello stesso giorno: sotto `strict: true`
+    # l'endpoint la rifiuta con 400. Cambia il mezzo, non il principio.
     features_used: tuple[FeatureUsed, ...] = Field(
         min_length=1, max_length=MAX_FEATURES_USED
     )

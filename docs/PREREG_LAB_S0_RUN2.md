@@ -485,9 +485,13 @@ citarne 13 era un comportamento ragionevole di chi legge quello schema. **Il
 vincolo esisteva dove respinge e non dove si può conoscere**, ed è una
 violazione dello spirito del §2 di `CLAUDE.md`. Il principio che ne resta,
 inciso qui perché valga oltre questo caso: **un vincolo che respinge deve
-essere conoscibile dove si decide.** Chiuso dalla firma **F12** (§14): il tetto
-del contratto è ora *derivato* dal vocabolario (21) e lo schema dichiara lo
-stesso numero in `maxItems` e nella descrizione. Il «12» si registra come
+essere conoscibile dove si decide.** Chiuso dalle firme **F12** e **F12-bis**
+(§14): il tetto del contratto è ora *derivato* dal vocabolario (21) e lo schema
+dichiara lo stesso numero nella **riga di descrizione** di `features_used`,
+generata da quella stessa costante. La forma `maxItems`, che F12 prescriveva
+accanto alla descrizione, è caduta contro un vincolo dell'API misurato lo
+stesso giorno: il quadro è qui sotto, «La dichiarazione non può essere
+`maxItems`». Il «12» si registra come
 **numero orfano** — nessuna decisione, nessun documento e nessun verbale ne
 attesta l'origine — accanto al precedente di questo stesso documento, il
 `budget_tokens: 400` con cui la sonda del rito T2 provò il thinking (§2.2,
@@ -501,6 +505,70 @@ Pinnato senza questa correzione, il RUN2 avrebbe prodotto `rejected_malformed`
 su ogni asset di ogni giorno: il gate §7(ii) sarebbe saltato al primo giorno e
 l'unità di conto del §3.1 non si sarebbe mai formata — zero coppie in 28
 giornate e $89,90 spesi per non misurare niente.
+
+#### La dichiarazione non può essere `maxItems`: il vincolo API, misurato (F12-bis)
+
+La firma **F12** prescriveva due sedi per la dichiarazione del tetto: la chiave
+`maxItems` dello schema **e** la riga di descrizione. Lo smoke del rito
+PIN-TER, eseguito con quello schema, non è arrivato all'inferenza: la **prima**
+chiamata è stata rifiutata dalla validazione dello schema, con 400, prima di
+ogni token.
+
+```
+tools.6.custom: For 'array' type, property 'maxItems' is not supported
+```
+
+`tools.6` è `submit_decision`: sette definizioni di tool, la settima è quella di
+registrazione (`arena/config.all_tool_schemas`). Nella riga di log della
+chiamata: `ok: false`, `attempts: 1`, `error_type: invalid_request_error`,
+`retryable: false`, durata **0,357 s**, **nessun token fatturato**.
+
+**Le quattro sonde.** Quattro chiamate minime, una variabile per volta, sullo
+stesso modello pinnato, il **2026-08-20**. Si trascrivono qui perché il referto
+del rito è gitignorato e questo è il documento che sopravvive al clone:
+
+| # | Sonda | Esito su `claude-opus-5` |
+| --- | --- | --- |
+| 1 | `strict: true` **con** `maxItems` | **400** — `For 'array' type, property 'maxItems' is not supported` |
+| 2 | `strict: true` **senza** `maxItems` | **200** |
+| 3 | `strict` **assente**, con `maxItems` | **200** |
+| 4 | `strict: true` con **`minItems`** | **200** |
+
+**Il vincolo, letto dalle quattro sonde.** Non è `maxItems` in sé a essere
+rifiutato — lo è **sotto `strict: true`** (sonde 1 e 3). E non è tutta la
+famiglia dei vincoli di cardinalità: **`minItems` passa con `strict`**, `maxItems`
+no (sonde 1 e 4). È una restrizione puntuale del sottoinsieme di JSON Schema che
+la modalità strict accetta, e va registrata come **fatto sulla superficie
+dell'API**, non come difetto dell'implementazione.
+
+**La decisione F12-bis** (owner, 20/08/2026, per delega esplicita), che
+**supersede F12(b)** — la sua premessa è falsificata dall'endpoint, esattamente
+come accadde ad `always_on_param_omitted` la mattina dello stesso giorno.
+`strict: true` **resta, e non è negoziabile**: il §8 di `CLAUDE.md` pretende il
+blocco strutturato via *strict tool use*. Quindi cade `maxItems`, non lo strict.
+Il tetto resta **applicato** dal contratto — F12(a) è intatta — e resta
+**dichiarato** dalla riga di descrizione, che è per giunta la sede che il
+modello legge davvero. Il numero in quella riga è **generato alla costruzione
+dello schema** interpolando `len(PRIMITIVE_FEATURES)`, mai scritto a mano
+(`arena/verbale.py`, `_descrizione_features_used`): **una sola fonte di verità,
+due proiezioni** — il contratto la applica, la descrizione la rende
+conoscibile dove si decide.
+
+**L'alternativa scartata, col motivo.** Togliere `strict: true` da
+`submit_decision` farebbe passare `maxItems` (sonda 3, **200**), ma perderebbe
+la garanzia di conformità dell'input strutturato e aggiungerebbe una **variabile
+di protocollo maggiore** fra S0 e RUN2 — la settima, dopo P1…P6. È scartata.
+
+**Il principio non cambia, cambia il mezzo**, e vale la pena ribadirlo perché è
+la lezione che sopravvive al caso particolare: **un vincolo che respinge deve
+essere conoscibile dove si decide.** F12 lo ha inciso, F12-bis lo esegue con
+l'unico mezzo che l'endpoint accetta.
+
+**Conseguenza sugli sha.** `tool_schemas_sha` si muove una **terza** volta,
+dentro lo stesso rito e prima del pin: `ce844892…b0eb15` (dopo F9) →
+`b2a5a844…52d20d` (dopo F12, **mai pinnato: quello schema non parte**) →
+`046f5b45…a4d365` (dopo F12-bis, **valore pinnato**). Il conto per esteso è al
+§13.1.
 
 **Terzo, e va tenuto separato dai primi due: la prima differenza di
 comportamento fra i due modelli, osservata.** Non era cercata, e non è un
@@ -695,11 +763,12 @@ PIN-TER** (20/08), che ha riparato il difetto rilevato al §15 punto 10.
 
 | **C4** | **La riga 35 di `agents/trader_v0/system_prompt.md`**, corretta **al rito del pin** con la stessa sostanza di C3 (firma **F9-bis**) | **Cambia cosa il Trader legge**: quella riga sta nell'elenco degli strumenti dentro il system prompt, quindi in **ogni** chiamata di ogni replica. Il valore numerico **non cambia**. Muove **`system_prompt_sha`**, e quindi il `freeze_id`. Nasce insieme a C3 e per la sua stessa ragione: correggere una metà della formulazione lascerebbe il modello a leggerne l'altra metà, che dice il contrario |
 
-| **C5** | **Lo schema di `submit_decision` dichiara il tetto di `features_used`**: `maxItems` derivato dal vocabolario (21) più una riga di descrizione che lo nomina (firma **F12**, 20/08) | **Cambia cosa il Trader legge**: lo schema dei tool sta nel contesto di ogni chiamata. Muove **`tool_schemas_sha`** — da `ce844892…b0eb15` a `b2a5a844…52d20d` — e quindi il `freeze_id`, che al pin viene riscritto comunque. Non aggiunge un vincolo: **dichiara** quello che il contratto già applicava e che lo schema taceva (§2.2). Il tetto applicato **si alza** da 12 a 21, perché ora è derivato dal vocabolario invece di essere una costante scritta a mano |
+| **C5** | **Lo schema di `submit_decision` dichiara il tetto di `features_used`** in **una sola sede**: la riga di descrizione, col numero generato alla costruzione dello schema da `len(PRIMITIVE_FEATURES)` (= 21), mai scritto a mano. Firma **F12** per il principio, **F12-bis** (20/08) per la forma finale: `maxItems` **non c'è**, perché sotto `strict: true` l'API lo rifiuta con 400 (§2.2, le quattro sonde) e `strict: true` non è negoziabile (`CLAUDE.md` §8) | **Cambia cosa il Trader legge**: lo schema dei tool sta nel contesto di ogni chiamata. Muove **`tool_schemas_sha`** — da `ce844892…b0eb15` a `046f5b45…a4d365` — e quindi il `freeze_id`, che al pin viene riscritto comunque. Il valore intermedio `b2a5a844…52d20d`, prodotto da F12 con `maxItems`, **non è mai stato pinnato**: quello schema non parte. Non aggiunge un vincolo: **dichiara** quello che il contratto già applicava e che lo schema taceva (§2.2). Il tetto applicato **si alza** da 12 a 21, perché ora è derivato dal vocabolario invece di essere una costante scritta a mano |
 
 C1 e C2 sono autorizzate dal **punto 15** del foglio di `zeroPipes` del 19/08
 (§0.6); C3 dalla firma **F9** del 20/08, C4 dalla firma **F9-bis** dello stesso
-giorno, C5 dalla firma **F12** del rito PIN-TER.
+giorno, C5 dalla firma **F12** del rito PIN-TER nel principio e da **F12-bis**
+del rito PIN-QUATER nella forma.
 
 **Cosa NON è una variabile, e perché si dichiara lo stesso.** La firma F9-bis
 tocca una terza sede, `contracts/vocabulary.py` riga 44, dove la descrizione di
@@ -728,8 +797,8 @@ differenza sono **quattro**:
 
 Sono **22 voci** in quattro classi. Ognuna è autorizzata: il modello da TL-007,
 P1 dal §B.3, C1 e C2 dal punto 15 del foglio, C3 dalla firma F9, C4 dalla firma
-F9-bis, C5 dalla firma F12, S11 dalla firma F13, le altre dai riti T1 e T3. Ma
-l'affermazione «una variabile sola» **non descrive più questa stagione**, e
+F9-bis, C5 dalle firme F12 e F12-bis, S11 dalla firma F13, le altre dai riti T1
+e T3. Ma l'affermazione «una variabile sola» **non descrive più questa stagione**, e
 tenerla in piedi renderebbe il RUN2 un esperimento che dichiara un disegno
 diverso da quello che esegue.
 
@@ -1439,7 +1508,7 @@ del `PREREG_LAB_S0` lo era per la Stagione 0.
 
 | # | Passo | Stato al 2026-08-20, dopo il rito T3-BIS |
 | --- | --- | --- |
-| 1 | **Questo documento committato.** I contenuti sono **firmati** (F1…F14, §14) e nel testo non resta nessun `[DA-FIRMARE]` | **manca il commit** |
+| 1 | **Questo documento committato.** I contenuti sono **firmati** (F1…F14, più F9-bis e F12-bis, §14) e nel testo non resta nessun `[DA-FIRMARE]` | **manca il commit** |
 | 2 | `scripts/verify_pin.py` verde sulla string `claude-opus-5` contro l'endpoint | **manca** (richiede rete e API) |
 | 3 | Smoke live verde, retention verificata di fatto | **manca** |
 | 4 | **La parola «stimata» sulla profondità, corretta in tutte le sue sedi** — variabili di contenuto **C3** (descrizione dello schema di `get_costs`, muove `tool_schemas_sha`) e **C4** (riga 35 di `agents/trader_v0/system_prompt.md`, muove `system_prompt_sha`), più `contracts/vocabulary.py` riga 44 che non muove nulla. I testi sono al **§13.1** | **DECISO (F9 per C3, F9-bis per C4 e per l'igiene): si applica QUI, al pin.** Non applicata dalla bozza |
@@ -1469,7 +1538,7 @@ si limitasse a passare o fallire non li avrebbe prodotti.
 
 | # | Passo | Firma | Effetto sul pin |
 | --- | --- | --- | --- |
-| 14 | **Il tetto di `features_used` deriva dal vocabolario** (21) e lo schema di `submit_decision` lo **dichiara** (`maxItems` + una riga di descrizione) | **F12** | variabile di contenuto **C5**; muove `tool_schemas_sha` e quindi il `freeze_id` |
+| 14 | **Il tetto di `features_used` deriva dal vocabolario** (21) e lo schema di `submit_decision` lo **dichiara** nella riga di descrizione, col numero generato dalla stessa costante. **Senza `maxItems`**: sotto `strict: true` l'API lo rifiuta con 400 (§2.2) | **F12** nel principio, **F12-bis** nella forma | variabile di contenuto **C5**; muove `tool_schemas_sha` e quindi il `freeze_id` |
 | 15 | **Il contatore dei token di ragionamento si legge dal percorso annidato** `usage.output_tokens_details.thinking_tokens` | **F13** | variabile di strumentazione **S11**; **non** muove nessuno sha del pin — non tocca né i context file né gli schemi |
 
 Il passo 14 è **precondizione al passo 3**, non un suo seguito: senza di esso
@@ -1540,19 +1609,26 @@ modo che il conto sia verificabile da chiunque cloni il repo:
 | `system_prompt_sha` | `7ccf9dc4fcecdd72dc122d522a73a97697b4d15ad9d9d8b33a9c2bdbfb6d4177` | `555d7fa52d1dffc0c0e6ee9f72d75c9ffbe0182675cfe4ded62e1e2f56145cef` |
 | `persona_sha` | `d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3` | invariato |
 
-**Poi è arrivata F12**, e `tool_schemas_sha` si è mosso una seconda volta, nello
-stesso rito e prima del pin. Il valore che il manifest porta — e che il timbro
-certifica — è l'**ultimo** della catena, non quello della riga qui sopra:
+**Poi sono arrivate F12 e F12-bis**, e `tool_schemas_sha` si è mosso altre due
+volte, dentro gli stessi riti e prima del pin. Il valore che il manifest porta —
+e che il timbro certifica — è l'**ultimo** della catena, non quello della riga
+qui sopra e nemmeno quello intermedio:
 
-| sha del pin | dopo F9/F9-bis | dopo F12 (valore pinnato) |
-| --- | --- | --- |
-| `tool_schemas_sha` | `ce8448924028390830645f4c6203fab2339a226dc6779b4d602090b9e2b0eb15` | `b2a5a8445de94060b3920d0e9322db0bd9195517ab58f6aca270b5947652d20d` |
-| `system_prompt_sha` | `555d7fa52d1dffc0c0e6ee9f72d75c9ffbe0182675cfe4ded62e1e2f56145cef` | invariato: F12 non tocca i context file |
-| `persona_sha` | `d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3` | invariato |
+| sha del pin | dopo F9/F9-bis | dopo F12 (**mai pinnato**) | dopo F12-bis (**valore pinnato**) |
+| --- | --- | --- | --- |
+| `tool_schemas_sha` | `ce8448924028390830645f4c6203fab2339a226dc6779b4d602090b9e2b0eb15` | `b2a5a8445de94060b3920d0e9322db0bd9195517ab58f6aca270b5947652d20d` | `046f5b45599430fa703259a4374c23b83d571cadc2239a897376abe33da4d365` |
+| `system_prompt_sha` | `555d7fa52d1dffc0c0e6ee9f72d75c9ffbe0182675cfe4ded62e1e2f56145cef` | invariato: F12 non tocca i context file | invariato: nemmeno F12-bis li tocca |
+| `persona_sha` | `d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3` | invariato | invariato |
+
+Il valore intermedio si trascrive invece di essere cancellato, ed è la ragione
+per cui questa tabella porta tre valori e non due: `b2a5a844…52d20d` è lo sha di
+uno schema che l'endpoint **rifiuta con 400** (§2.2, sonda 1). Nessuna chiamata
+reale lo ha mai usato, nessun manifest lo porta, e chi domani lo trovasse in un
+referto deve poter capire in una riga perché non è il valore pinnato.
 
 ---
 
-## §14 — Il registro delle firme (F1…F14 + F9-bis, owner, 2026-08-20)
+## §14 — Il registro delle firme (F1…F14 + F9-bis + F12-bis, owner, 2026-08-20)
 
 Questa sezione **non elenca più punti aperti**: elenca le dieci decisioni con
 cui l'owner ha chiuso i nove `[DA-FIRMARE]` del rito T3, più il segnaposto che
@@ -1576,6 +1652,7 @@ rito T3-BIS.
 | **F11** | **Thinking su `claude-opus-5`: payload invariato** (nessun blocco `thinking`, come S0), **dichiarazione corretta** da `always_on_param_omitted` a **`api_default_param_omitted`**. Motivo: la sonda del 20/08 mostra `disabled` **accettato** (200, riprodotto), quindi «sempre attivo e non disattivabile» è falso su questo modello; ma accettato ≠ efficace, e pinnare `disabled` esplicito comprerebbe un'illusione al prezzo di una variabile di protocollo in più rispetto a S0. L'alternativa `disabled_explicit` è **scartata** con questo motivo | §2.2, §4.2 riga P3, §12.2 punto 17, §15 punti 10-11; `contracts/freeze.py`, `arena/llm_client.py`, `arena/config.py`, `scripts/verify_pin.py`, `CLAUDE.md` §10 | il rosso del rito del pin |
 
 | **F12** | **Il tetto di `features_used` diventa DERIVATO dal vocabolario** (`len(PRIMITIVE_FEATURES)` = 21), e lo schema di `submit_decision` **dichiara** lo stesso numero (`maxItems` + una riga di descrizione). Ogni altra semantica di validazione resta intatta. Il **12** precedente è registrato come **numero orfano**, di origine non documentata, dissolto dalla derivazione. Principio inciso: *un vincolo che respinge deve essere conoscibile dove si decide* | §2.2, §4.3 riga C5, §4.4, §13 passo 14; `contracts/vocabulary.py`, `contracts/decision.py`, `arena/verbale.py` | il rosso dello smoke del rito PIN-BIS |
+| **F12-bis** | **Lo schema di `submit_decision` NON porta `maxItems`**, e `strict: true` **resta**. Supersede **F12(b)**, la cui premessa è falsificata dall'endpoint: sotto `strict: true` l'API rifiuta `maxItems` su un array con 400, mentre lo accetta senza `strict` e accetta `minItems` con `strict` — quattro sonde del 20/08, trascritte al §2.2. Il tetto resta **applicato** dal contratto (F12(a) intatta) e **dichiarato** dalla sola riga di descrizione, col numero **generato** alla costruzione dello schema da `len(PRIMITIVE_FEATURES)`, mai scritto a mano: una sola fonte di verità, due proiezioni. L'alternativa «togliere `strict`» è **scartata**, col motivo (variabile di protocollo maggiore, garanzia di conformità persa). Il principio di F12 non cambia: cambia il mezzo | §2.2 «La dichiarazione non può essere `maxItems`», §4.3 riga C5, §13 passo 14, §13.1; `arena/verbale.py`, `contracts/decision.py`, `tests/test_riparazioni_run2.py` | il rosso dello smoke del rito PIN-TER |
 | **F13** | **Il contatore dei token di ragionamento si legge dal percorso annidato** `usage.output_tokens_details.thinking_tokens`, dove la documentazione ufficiale lo colloca. L'assenza resta loggata **come assenza** (§A.7): mai uno zero al posto di una misura | §4.1 riga S11, §13 passo 15, §15 punto 10; `arena/llm_client.py` | il §15 punto 10 |
 | **F14** | **`OPERATIONS.md` §2-bis: lo snippet legge `meta`, non `usage`.** La telemetria della chiamata sta sotto la chiave `meta` del JSONL (`toolserver/toollog.py`), e una riga di log non ha alcuna chiave `usage`; la procedura, seguita alla lettera, restituiva `null` per ogni riga | `docs/OPERATIONS.md` §2-bis | un difetto della procedura scritta, non del codice |
 
@@ -1587,6 +1664,15 @@ delle tre nasce da un ragionamento**, tutte e tre nascono da uno smoke live
 eseguito sul modello pinnato. F12 chiude un rosso che avrebbe reso la stagione
 inutile; F13 chiude una pendenza che il PIN-BIS aveva dichiarato e non toccato;
 F14 corregge una riga di procedura che nessuno aveva mai eseguito alla lettera.
+
+**F12-bis è firmata l'ultima**, il 20/08/2026, per delega esplicita, dal prompt
+del rito PIN-QUATER. Segue lo stesso schema di F9 → F9-bis e di F11: una firma
+la cui premessa cade contro una misura **non si riscrive in silenzio e non si
+esegue alla lettera contro il fatto** — si supersede con una firma nuova,
+datata, che dice quale metà cade e perché. Qui cade il **mezzo** (`maxItems`) e
+resta il **principio** (il vincolo conoscibile dove si decide). Il rito PIN-TER
+si è fermato sul rosso invece di sostituire il mezzo di propria iniziativa,
+ed è la ragione per cui questa riga esiste.
 
 **L'unico segnaposto residuo, per esteso.** Nel Freeze manifest,
 `rito_config.prereg_ref.commit` vale `[DA-FIRMARE: il commit che congela il

@@ -38,6 +38,7 @@ from arena.runner import DailyRunner, _to_params
 from arena.verbale import (
     SUBMIT_DECISION_SCHEMA,
     MalformedReason,
+    _descrizione_features_used,
     is_true_malformed,
 )
 from contracts.decision import Action, DecisionRecord, FeatureUsed
@@ -1248,22 +1249,43 @@ def test_il_verbale_da_tredici_voci_dello_smoke_ora_passa():
     assert len(tredici.features_used) == 13
 
 
-def test_lo_schema_dichiara_lo_stesso_tetto_che_il_contratto_applica():
-    """F12(b): il vincolo è conoscibile dove si decide, non solo dove respinge.
+def test_lo_schema_dichiara_il_tetto_senza_maxitems_e_il_numero_e_derivato():
+    """F12-bis: il principio di F12 sopravvive, il mezzo `maxItems` no.
 
-    Due lati: lo schema porta il tetto ed è lo **stesso numero** del contratto
-    (se qualcuno ne cambiasse uno solo, questo test cade); e la descrizione lo
-    nomina, perché un `maxItems` in mezzo allo schema è più facile da mancare
-    di una frase nella riga che il modello legge.
+    Due lati, e sono quelli che il vincolo API misurato il 2026-08-20 impone.
+
+    **Lato che deve mancare**: nello schema serializzato la chiave `maxItems`
+    non compare in nessun punto. Sotto `strict: true` l'endpoint la rifiuta
+    con 400, e `strict: true` non è negoziabile (`CLAUDE.md` §8): uno schema
+    che la porta non è uno schema più severo, è uno schema che **non parte**.
+    Si controlla il JSON intero e non la sola proprietà `features_used`,
+    perché a rifiutare la chiamata basta una `maxItems` ovunque.
+
+    **Lato che deve esserci**: la riga di descrizione dichiara il tetto, ed è
+    lo **stesso numero** che il contratto applica. Il test lo verifica in modo
+    che fallirebbe se il numero fosse scritto a mano: cambia la costante e
+    pretende che la descrizione la segua. Una descrizione con un `21`
+    letterale passerebbe l'uguaglianza con `MAX_FEATURES_USED` di oggi e
+    cadrebbe qui, che è esattamente la regressione da impedire.
     """
+    serializzato = json.dumps(SUBMIT_DECISION_SCHEMA, ensure_ascii=False)
+    assert "maxItems" not in serializzato
+
     features = SUBMIT_DECISION_SCHEMA["input_schema"]["properties"]["features_used"]
-    assert features["maxItems"] == MAX_FEATURES_USED
+    assert "maxItems" not in features
 
     campo = DecisionRecord.model_fields["features_used"]
     tetti = [m.max_length for m in campo.metadata if hasattr(m, "max_length")]
     assert tetti == [MAX_FEATURES_USED]
 
+    # La descrizione dello schema è la proiezione della stessa costante.
+    assert features["description"] == _descrizione_features_used(MAX_FEATURES_USED)
     assert str(MAX_FEATURES_USED) in features["description"]
+
+    # Il numero segue la costante: se fosse hardcoded, questi due cadrebbero.
+    altro = MAX_FEATURES_USED + 7
+    assert str(altro) in _descrizione_features_used(altro)
+    assert str(MAX_FEATURES_USED) not in _descrizione_features_used(altro)
 
 
 # ==========================================================================
