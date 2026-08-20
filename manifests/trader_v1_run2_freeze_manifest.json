@@ -1,0 +1,101 @@
+{
+  "_pin": {
+    "campi_lasciati_come_stavano_e_perche": {
+      "context_git_sha": "resta a a924da0, il commit del passo 0 del rito T3, come dato di provenienza della composizione. E' ESCLUSO dal calcolo del freeze_id (verbale RUN2 A.2), quindi non tocca ne' il pin ne' il timbro",
+      "ots_pending / ots_proof_path": "true / null a questo passo: il timbro si appone DOPO il commit del manifest, sui byte del suo BLOB. Il flip a false avviene in un commit dedicato e NON cambia il freeze_id - entrambi i campi sono esclusi dal calcolo, verificato con un assert dal rito",
+      "pinned_at_utc": "2026-08-20, la data del pin, gia' dichiarata in bozza"
+    },
+    "cosa_ha_valorizzato_questo_rito": {
+      "freeze_id": "RICALCOLATO dopo tutte le valorizzazioni. I valori precedenti - 1c429d6f... della bozza del rito T3 e 30170610... dopo la sola F11 - sono superati e non sono mai stati timbrati",
+      "pin_commit": "il commit A2 del rito PIN-QUATER (vedi pin_commit_semantica)",
+      "price_per_mtok_input / output / cache_write_5m / cache_read": "5,00 / 25,00 / 6,25 / 0,50 USD per MTok - LETTE dall'evidenza docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md, riga «Claude Opus 5» del listino ufficiale, letta il 2026-08-20. Trascritte anche in DECISION_LOG.md, voce TL-010. La scrittura in cache e' quella a 5 minuti (6,25) e non quella a 1 ora (10,00) perche' il client non specifica ttl e il default e' 5 minuti",
+      "season_budget_usd": "89,90 USD - firma F5 dell'owner, 2026-08-20",
+      "system_prompt_sha": "555d7fa5... - riscritto: la bozza portava 7ccf9dc4..., fermo al valore pre-F9-bis. Muove per la variabile di contenuto C4 (riga 35 del system prompt: «profondita' stimata» -> «profondita' dichiarata»)",
+      "thinking_declared": "api_default_param_omitted - firma F11, gia' applicata dal rito PIN-BIS e riaffermata qui",
+      "tool_schemas_sha": "046f5b45... - riscritto: la bozza portava d3accf7f..., fermo al valore pre-F9. Muove due volte: per C3 (descrizione dello schema di get_costs, F9) e per C5 (la riga di descrizione di features_used, F12 + F12-bis). La catena per esteso: d3accf7f... -> ce844892... (dopo F9/F9-bis) -> b2a5a844... (dopo F12, MAI PINNATO: quello schema l'endpoint lo rifiuta con 400) -> 046f5b45... (dopo F12-bis, valore pinnato). PREREG 13.1"
+    },
+    "cosa_questo_pin_NON_significa": "La stagione NON e' partita. Il pin e' una PRECONDIZIONE al primo giorno (PREREG 13), non il primo giorno: il task notturno resta disabilitato e l'avvio e' un atto esplicito dell'owner (PREREG 13, passo 12).",
+    "data_del_pin": "2026-08-20",
+    "firme_dell_owner_che_questo_pin_incorpora": {
+      "elenco": "F1...F14, piu' F9-bis e F12-bis. Tutte del 2026-08-20, tutte per delega esplicita",
+      "quelle_che_muovono_il_freeze_id": "F5 (preventivo), F9 e F9-bis (C3 e C4, gli sha del contenuto), F11 (thinking_declared), F12 e F12-bis (C5, tool_schemas_sha). F13 e F14 NON lo muovono: strumentazione e procedura",
+      "registro": "docs/PREREG_LAB_S0_RUN2.md, 14 - Il registro delle firme"
+    },
+    "fonti": {
+      "contratto": "contracts/freeze.py, classe FreezeManifest",
+      "listino_nel_registro_delle_decisioni": "DECISION_LOG.md, voce TL-010",
+      "modello": "DECISION_LOG.md, voce TL-007; verificato contro l'endpoint da scripts/verify_pin.py il 2026-08-20",
+      "pre_registrazione": "docs/PREREG_LAB_S0_RUN2.md, congelata al commit A2",
+      "preventivo_e_listino": "docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md",
+      "procedura_dello_smoke": "docs/OPERATIONS.md, 2-bis"
+    },
+    "is_pinned": true,
+    "is_pinned_nota": "is_pinned NON e' un campo del contratto: e' una PROPRIETA' calcolata (contracts.freeze.FreezeManifest.is_pinned), vera se e solo se pin_commit non e' uno dei segnaposto dichiarati in PIN_COMMIT_PLACEHOLDERS. Si trascrive qui perche' sia leggibile senza eseguire codice, e vale True.",
+    "pin_commit_semantica": {
+      "forma": "sha COMPLETO a 40 caratteri, non la forma breve a 7 usata altrove nel file (context_git_sha, prereg_s0_ref.commit). Il contratto ammette 7-40; qui si sceglie 40 perche' questo campo entra nel freeze_id e identifica il segmento di track record: un'abbreviazione che domani diventasse ambigua renderebbe ambiguo il pin.",
+      "perche_questo_commit_e_non_quello_del_manifest": "Il commit che porta QUESTO file non puo' essere il valore di un campo contenuto in questo file: il suo sha dipende dal contenuto, e il contenuto dipenderebbe dallo sha. La semantica del contratto e' un'altra e non e' circolare: pin_commit PRENDE IL POSTO di context_git_sha, che era «lo sha del repo al momento in cui il manifest e' stato composto», e ne corregge il difetto (cambiava a ogni commit anche quando l'agente non era cambiato). Il commit che identifica il CONTENUTO congelato e resta fisso per la stagione e' quindi l'ULTIMO commit che tocca cio' che il manifest pinna: i context file, gli schemi dei tool e il PREREG. E' il commit A2 del rito PIN-QUATER, lo stesso di rito_config.prereg_ref.commit, e la coincidenza non e' un caso: A2 e' per costruzione l'ultimo commit che tocca entrambi. Il suo albero riproduce esattamente i tre sha del contenuto congelato.",
+      "riga_del_contratto": "contracts/freeze.py: «Commit del RITO DEL PIN: fisso per tutta la stagione. Prende il posto di context_git_sha dentro il freeze_id. Finche' e' un segnaposto il pin non esiste, e il runner si rifiuta di girare.»",
+      "valore": "afc40d9500ace54b9cfbaebff440abae075cf4ae"
+    },
+    "rito": "PIN-QUATER, ultimo dei quattro riti del pin del RUN2 (PIN, PIN-BIS, PIN-TER, PIN-QUATER)",
+    "stato": "PIN - questo file NON e' piu' una bozza"
+  },
+  "freeze_id": "2136b199210dd9f231ba8faef3bd764161585167256640373c4ddc1e23d03f02",
+  "freeze_manifest": {
+    "caching_policy": "cache_control ephemeral su tre blocchi: (1) il system prompt, blocco unico, identico a ogni chiamata di ogni replica di ogni asset (D1); (2) l'ultima definizione di tool nell'elenco, che chiude il prefisso cacheabile di tutte le definizioni, anch'esse identiche a ogni chiamata; (3) l'ultimo tool_result della conversazione corrente (tipicamente il dossier dell'asset), che resta stabile da un turno al successivo negli scambi con più di due turni.",
+    "context_git_sha": "a924da0",
+    "manifest_version": 1,
+    "max_tokens": 8000,
+    "model_string": "claude-opus-5",
+    "model_string_note": "TL-007 (18/08/2026): il modello del Trader passa da claude-fable-5 a claude-opus-5. La string e' completa cosi' com'e'. Tier dichiarato: NON di punta (ratifica R-B dell'owner, 20/08/2026) - il RUN2 e' la stagione 1 di 2 del budget di classe «agente LLM discrezionale», e la stagione 2, se serve, gira sul modello di punta. Da ri-verificare contro l'endpoint con scripts/verify_pin.py il giorno del pin.",
+    "ots_pending": true,
+    "ots_proof_path": null,
+    "persona_sha": "d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3",
+    "pin_commit": "afc40d9500ace54b9cfbaebff440abae075cf4ae",
+    "pinned_at_utc": "2026-08-20T00:00:00Z",
+    "price_per_mtok_cache_read": 0.5,
+    "price_per_mtok_cache_write_5m": 6.25,
+    "price_per_mtok_input": 5.0,
+    "price_per_mtok_output": 25.0,
+    "sampling_policy": "api_default_omitted",
+    "season_budget_usd": 89.9,
+    "season_expected_days": 28,
+    "system_prompt_sha": "555d7fa52d1dffc0c0e6ee9f72d75c9ffbe0182675cfe4ded62e1e2f56145cef",
+    "temperature": null,
+    "thinking_declared": "api_default_param_omitted",
+    "thinking_policy": "api_default",
+    "tool_schemas_sha": "046f5b45599430fa703259a4374c23b83d571cadc2239a897376abe33da4d365",
+    "top_k": null,
+    "top_p": null
+  },
+  "rito_config": {
+    "cap_calendario_giorni": 42,
+    "k_sonde": 30,
+    "k_stagione": 3,
+    "obiettivo_coppie": 40,
+    "partenza_entro": "2026-09-13",
+    "prereg_ref": {
+      "commit": "afc40d9500ace54b9cfbaebff440abae075cf4ae",
+      "file": "docs/PREREG_LAB_S0_RUN2.md",
+      "nota": "Il PREREG del RUN2 e' congelato al commit qui sopra, che e' l'ULTIMO commit che lo tocca. docs/PREREG_LAB_S0.md resta congelato e si cita, non si riscrive (TL-007)."
+    },
+    "prereg_s0_ref": {
+      "commit": "9ef5681",
+      "file": "docs/PREREG_LAB_S0.md",
+      "nota": "la pre-registrazione della Stagione 0, congelata e timbrata. Non si tocca."
+    },
+    "replica_ids": [
+      "r1",
+      "r2",
+      "r3"
+    ],
+    "size_policy": "fissa a rischio unitario (0.05), normalizzata dal Risk Officer (D3). La calibrazione di p_accordo non e' raggiungibile in una stagione (A.9): il sizing resta fisso.",
+    "snapshot_schedule_utc": "00:00",
+    "unita_di_conto": "coppia giornata-asset con tutte e tre le repliche valide (A.8)",
+    "universe": [
+      "BTC",
+      "ETH"
+    ],
+    "universe_status": "pre_screen_ufficiale"
+  }
+}
