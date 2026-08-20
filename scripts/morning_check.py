@@ -100,19 +100,29 @@ EXIT_MEANING: dict[int, str] = {
 }
 
 DEFAULT_LOG_DIR = Path("data/logs")
-#: I file che l'upgrade settimanale ritenta di ancorare. Sono i **tre**
-#: timbri della Stagione 0, elencati in
-#: `docs/research/results/2026-08-20_PREREG-EVIDENCE_ANCORAGGI_OTS_S0.md`.
+#: I file che l'upgrade settimanale ritenta di ancorare. Sono **cinque**: i
+#: tre timbri della Stagione 0, elencati in
+#: `docs/research/results/2026-08-20_PREREG-EVIDENCE_ANCORAGGI_OTS_S0.md`, piu'
+#: i due del RUN2, apposti al rito PIN-QUATER del 2026-08-20.
+#:
 #: `MANIFEST_S0.json` mancava, e la conseguenza si e' misurata: il 20/08 il suo
 #: `.ots` era ancora **pending su tutti e quattro i calendar** mentre gli altri
 #: due erano gia' confermati su Bitcoin: nessuno stava ritentando l'upgrade per
 #: lui. Un ancoraggio fuori da questa lista non e' meno timbrato, ma resta
 #: fermo alla ricevuta provvisoria finche' qualcuno non se ne ricorda a mano —
-#: ed e' la ricevuta definitiva a valere come prova.
+#: ed e' la ricevuta definitiva a valere come prova. I due del RUN2 nascono
+#: pending come quello: entrano qui **nello stesso rito che li appone**,
+#: perche' aggiungerli dopo significherebbe ripetere quell'errore sapendolo.
+#:
+#: Regola che ne discende, per chi timbrera' il prossimo artefatto: un
+#: ancoraggio nuovo si aggiunge a questa lista nel rito che lo crea, non in
+#: uno successivo.
 DEFAULT_OTS_TARGETS: tuple[Path, ...] = (
     Path("manifests/trader_v0_freeze_manifest.json"),
     Path("docs/PREREG_LAB_S0.md"),
     Path("MANIFEST_S0.json"),
+    Path("docs/PREREG_LAB_S0_RUN2.md"),
+    Path("manifests/trader_v1_run2_freeze_manifest.json"),
 )
 
 #: Nome del file d'allarme, alla radice del repo. Gitignorato (`ALLARME_*.txt`).

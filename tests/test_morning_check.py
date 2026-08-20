@@ -23,6 +23,7 @@ from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from ledger.ops_ledger import OpsLedger
 from ledger.trader_ledger import LedgerKey, TraderLedger
 from scripts.morning_check import (
+    DEFAULT_OTS_TARGETS,
     EXIT_NO_VERBALI,
     EXIT_OK,
     default_alert,
@@ -356,16 +357,21 @@ def test_upgrade_ots_gira_solo_il_lunedi(percorsi):
         Completed(0, "stato: confermato su Bitcoin", ""),
         Completed(0, "stato: ancora pending, nessun aggiornamento", ""),
         Completed(0, "stato: confermato su Bitcoin", ""),
+        Completed(0, "stato: ancora pending, nessun aggiornamento", ""),
+        Completed(0, "stato: ancora pending, nessun aggiornamento", ""),
     )
 
     esito = _controllo(percorsi, is_monday=True, runner=runner)
 
     assert esito.ots_attempted is True
-    # I file timbrati della Stagione 0 sono TRE, e tutti e tre vanno ritentati:
-    # `MANIFEST_S0.json` mancava da questa lista e il suo `.ots` era rimasto
-    # pending su tutti e quattro i calendar mentre gli altri due erano gia'
-    # confermati su Bitcoin.
-    assert len(runner.commands) == 3
+    # I file ancorati sono CINQUE, e tutti e cinque vanno ritentati: i tre
+    # della Stagione 0 piu' i due del RUN2, apposti al rito PIN-QUATER del
+    # 2026-08-20. `MANIFEST_S0.json` mancava da questa lista e il suo `.ots`
+    # era rimasto pending su tutti e quattro i calendar mentre gli altri due
+    # erano gia' confermati su Bitcoin: e' il difetto che questa lista esiste
+    # per non ripetere, ed e' la ragione per cui i due del RUN2 entrano nello
+    # stesso rito che li appone invece che in uno successivo.
+    assert len(runner.commands) == 5
     assert runner.commands[0][1].endswith("ots_stamp.py")
     assert runner.commands[0][2] == "upgrade"
     assert str(percorsi["repo_root"] / "manifests" / "trader_v0_freeze_manifest.json") in (
@@ -373,6 +379,12 @@ def test_upgrade_ots_gira_solo_il_lunedi(percorsi):
     )
     assert str(percorsi["repo_root"] / "docs" / "PREREG_LAB_S0.md") in runner.commands[1]
     assert str(percorsi["repo_root"] / "MANIFEST_S0.json") in runner.commands[2]
+    assert str(percorsi["repo_root"] / "docs" / "PREREG_LAB_S0_RUN2.md") in (
+        runner.commands[3]
+    )
+    assert str(
+        percorsi["repo_root"] / "manifests" / "trader_v1_run2_freeze_manifest.json"
+    ) in runner.commands[4]
     testo = esito.log_path.read_text(encoding="utf-8")
     assert "upgrade OTS" in testo
     assert "confermato su Bitcoin" in testo
@@ -438,9 +450,7 @@ def test_upgrade_ots_che_solleva_non_blocca_il_controllo(percorsi):
 def test_upgrade_ots_e_la_giornata_mancante_convivono(percorsi):
     """Lunedi' senza verbali: sia l'avviso sia il tentativo di upgrade partono."""
     TraderLedger(percorsi["ledger_path"])
-    runner = FakeRunner(
-        Completed(0, "", ""), Completed(0, "", ""), Completed(0, "", "")
-    )
+    runner = FakeRunner(*(Completed(0, "", "") for _ in DEFAULT_OTS_TARGETS))
     allarme = FakeAlert()
 
     esito = _controllo(percorsi, is_monday=True, runner=runner, alert=allarme)
@@ -448,7 +458,7 @@ def test_upgrade_ots_e_la_giornata_mancante_convivono(percorsi):
     assert esito.exit_code == EXIT_NO_VERBALI
     assert esito.ots_attempted is True
     assert len(allarme.messages) == 1
-    assert len(runner.commands) == 3
+    assert len(runner.commands) == len(DEFAULT_OTS_TARGETS) == 5
 
 
 # --------------------------------------------------------------------------
