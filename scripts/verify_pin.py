@@ -7,10 +7,23 @@ Fa tre cose e le dichiara tutte:
 2. **D4 ri-verificata su Fable**: manda una chiamata minima *senza* parametri
    di sampling (deve passare) e una *con* `temperature` (deve fallire con 400).
    È la prova operativa che il default si ottiene per omissione.
-3. **Thinking**: verifica che `thinking={"type": "disabled"}` sia rifiutato,
-   cioè che su questo modello il ragionamento non sia disattivabile.
+3. **Thinking — impronta della superficie API**, non più un invariante.
+   Fino al 20/08/2026 questa sonda pretendeva che `thinking={"type":
+   "disabled"}` fosse **rifiutato**, cioè che su questo modello il
+   ragionamento non fosse disattivabile. Era un'aspettativa scritta per
+   `claude-fable-5` e trattata come universale: su `claude-opus-5` quella
+   chiamata risponde **200**, e il rito del pin del 20/08 si fermò su un rosso
+   che non era un difetto del modello ma dell'aspettativa.
 
-Consuma budget reale: due o tre chiamate minime.
+   Dalla firma **F11** la sonda non pretende più un esito: **confronta** le
+   risposte con l'impronta misurata il 20/08/2026 (`THINKING_BASELINE`). Le
+   tre forme e i loro esiti sono la fotografia di come il modello era servito
+   quel giorno. Uno **scarto** da quella fotografia non è un pin da non fare
+   per ragioni di merito: è un **cambio di serving**, ed è esito rosso perché
+   il pin descriverebbe un modello che non è più quello.
+
+Consuma budget reale: cinque chiamate minime, due delle quali rifiutate con
+400 e quindi non fatturate.
 
     TRADERLAB_ALLOW_LIVE_API=1 uv run python scripts/verify_pin.py
 """
@@ -33,6 +46,36 @@ from arena.config import (
 from toolserver.config import live_api_allowed
 
 PROBE = [{"role": "user", "content": "Rispondi con la sola parola: ok"}]
+
+#: Data in cui l'impronta della superficie API qui sotto è stata misurata. Non
+#: è la data del pin: è la data della **fotografia** con cui ogni esecuzione
+#: futura si confronta.
+THINKING_BASELINE_DATE = "2026-08-20"
+
+#: Le tre forme del parametro `thinking` e l'esito misurato su
+#: `claude-opus-5` alla data qui sopra. `True` = la chiamata passa (200),
+#: `False` = la chiamata è rifiutata (400).
+#:
+#: Le tre righe vengono da due riti dello stesso giorno:
+#:
+#: - parametro **omesso** → 200 (sonda del rito T2, evidenza §7, e probe 2 di
+#:   questo script). È la forma pinnata;
+#: - `enabled` + `budget_tokens` → 400, «`thinking.type.enabled` is not
+#:   supported for this model» (sonda T2 con budget 400, 1024 e 16000);
+#: - `disabled` → **200, accettato** (rito del pin del 20/08, riprodotto due
+#:   volte). È il reperto che ha fatto nascere F11.
+#:
+#: La documentazione ufficiale concorda, letta il 2026-08-20: la tabella
+#: «Configurations each model rejects» di
+#: https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+#: dà per «Claude Opus 5» modalità «Adaptive only», default «On», e rifiuta
+#: `"enabled"` e `"disabled"`, con la nota 2 «Claude Opus 5 accepts
+#: "disabled" at effort high or below» — e `high` è il default dell'API.
+THINKING_BASELINE: tuple[tuple[str, dict[str, object] | None, bool], ...] = (
+    ("thinking assente (la forma pinnata)", None, True),
+    ("thinking.type='enabled', budget 1024", {"type": "enabled", "budget_tokens": 1024}, False),
+    ("thinking.type='disabled'", {"type": "disabled"}, True),
+)
 
 
 def _line(ok: bool, label: str, detail: str = "") -> None:
@@ -121,18 +164,33 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         _line(True, "temperature rifiutata come atteso", str(exc)[:120])
 
-    # 3. Thinking non disattivabile.
-    print("\n== 3. Thinking sempre attivo ==")
-    try:
-        client.messages.create(**base, thinking={"type": "disabled"})
+    # 3. Thinking: l'impronta della superficie API, non un invariante (F11).
+    print(
+        f"\n== 3. Thinking — impronta della superficie API "
+        f"(baseline {THINKING_BASELINE_DATE}) =="
+    )
+    for etichetta, thinking, atteso_passa in THINKING_BASELINE:
+        extra = {} if thinking is None else {"thinking": dict(thinking)}
+        try:
+            client.messages.create(**base, **extra)
+            passa, dettaglio = True, "200"
+        except Exception as exc:  # noqa: BLE001
+            passa, dettaglio = False, str(exc)[:110]
+        coincide = passa is atteso_passa
+        atteso = "200" if atteso_passa else "400"
         _line(
-            False,
-            "thinking 'disabled' ACCETTATO",
-            "rivedere la nota su thinking_policy in arena/config.py",
+            coincide,
+            f"{etichetta}: {'200' if passa else '400'}",
+            dettaglio
+            if coincide
+            else (
+                f"SCARTO dalla baseline {THINKING_BASELINE_DATE} (atteso "
+                f"{atteso}): il modello non e' piu' servito come quando "
+                f"il pin e' stato firmato — {dettaglio}"
+            ),
         )
-        ok = False
-    except Exception as exc:  # noqa: BLE001
-        _line(True, "thinking 'disabled' rifiutato come atteso", str(exc)[:120])
+        if not coincide:
+            ok = False
 
     # 4. Il manifest che verrebbe congelato.
     manifest = build_freeze_manifest(
@@ -153,10 +211,13 @@ def main() -> int:
     print(f"       ots_pending      : {manifest.ots_pending}")
 
     print(
-        "\nPROMEMORIA: claude-fable-5 richiede 30 giorni di data retention. "
-        "Con l'organizzazione in zero-data-retention OGNI chiamata risponde "
-        "400, indipendentemente dal payload. Verificare la configurazione "
-        "dell'organizzazione prima del pin."
+        "\nPROMEMORIA (annotato il 2026-08-20, F11): il vincolo di 30 "
+        "giorni di data retention era scritto per claude-fable-5, che "
+        "sotto zero-data-retention non e' disponibile. Per claude-opus-5 "
+        "la documentazione ufficiale NON pone lo stesso vincolo. La riga "
+        "resta come promemoria di verificare la configurazione "
+        "dell'organizzazione prima del pin: e' lo smoke live a "
+        "dimostrarlo di fatto, non questo script."
     )
     print(
         "PROMEMORIA: il fallback server-side NON e' attivo di proposito. "

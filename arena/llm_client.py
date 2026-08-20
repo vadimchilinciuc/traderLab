@@ -221,17 +221,26 @@ def assert_thinking_coherent(
     Due direzioni, entrambe un rifiuto:
 
     - la dichiarazione dice che il parametro **non si invia** e il payload
-      contiene `thinking` — è la forma che su `claude-fable-5` produce 400, e
-      anche se non lo producesse sarebbe una chiamata non dichiarata;
+      contiene `thinking` — chiamata non dichiarata, e quindi non inviata;
     - la dichiarazione dice che il parametro **si invia** e il payload non ce
       l'ha — il manifest descriverebbe una configurazione che non è stata usata.
+
+    L'invariante è, e resta, **«nessun blocco `thinking` nel payload»**
+    (riparazione A.7). Quello che è cambiato il 20/08/2026 con la firma **F11**
+    non è il controllo ma la sua giustificazione: fino a Fable l'omissione era
+    l'unica forma che l'API accettasse, su `claude-opus-5` è una scelta di
+    disegno. Il controllo ha quindi **più** ragione di esistere, non meno: su
+    un modello che accetterebbe anche `{"type": "disabled"}`, una `thinking`
+    comparsa nel payload per errore non verrebbe più fermata dall'API con un
+    400, e passerebbe in silenzio aprendo un protocollo di chiamata diverso da
+    quello pinnato.
 
     Il controllo sta qui e non nel prompt perché è un vincolo che deve valere
     sempre (`CLAUDE.md` §2), e vive nel client perché è l'unico punto che vede
     il payload esatto.
     """
     presente = "thinking" in payload
-    if declared is ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED and presente:
+    if declared is ThinkingDeclaration.API_DEFAULT_PARAM_OMITTED and presente:
         raise ThinkingDeclarationViolated(
             "il Freeze manifest dichiara thinking_declared="
             f"{declared.value} (parametro omesso), ma il payload contiene "
@@ -301,9 +310,13 @@ class AnthropicTraderClient:
     - **Nessun parametro di sampling** (D4). Su Fable `temperature`, `top_p` e
       `top_k` sono rimossi e inviarli produce 400: la policy dichiarata è anche
       l'unica chiamata valida.
-    - **Nessuna configurazione di `thinking`.** Su Fable il thinking è sempre
-      attivo; `{"type": "disabled"}` e `budget_tokens` producono entrambi 400.
-      Si omette il parametro.
+    - **Nessuna configurazione di `thinking`.** Si omette il parametro e si
+      prende il default del fornitore (firma **F11**, 20/08/2026,
+      `thinking_declared = api_default_param_omitted`). Su `claude-opus-5`
+      `{"type": "enabled"}` produce 400 mentre `{"type": "disabled"}` è
+      **accettato**: l'omissione non è più un vincolo dell'API come lo era su
+      Fable, è una scelta — la stessa che la Stagione 0 ha fatto, tenuta ferma
+      per non aggiungere una variabile di protocollo.
     - **Streaming di default.** I turni di Fable possono durare minuti e
       `max_tokens` è alto perché il thinking consuma lo stesso budget: senza
       streaming si rischia il timeout HTTP dell'SDK.
@@ -335,9 +348,9 @@ class AnthropicTraderClient:
         if manifest.thinking_policy is not ThinkingPolicy.API_DEFAULT:
             raise LLMError(
                 f"thinking_policy={manifest.thinking_policy.value} non è "
-                f"inviabile: su claude-fable-5 il thinking è sempre attivo e "
-                f"sia 'disabled' sia budget_tokens producono 400. L'unica "
-                f"policy valida è api_default (parametro omesso)."
+                f"inviabile: questo client omette il parametro `thinking` e "
+                f"prende il default del fornitore (F11). L'unica policy "
+                f"valida è api_default (parametro omesso)."
             )
         self._manifest = manifest
         self.model_version = manifest.model_string

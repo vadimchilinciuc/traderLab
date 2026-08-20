@@ -283,7 +283,9 @@ def build_freeze_manifest(
     price_per_mtok_output: float | None = None,
     price_per_mtok_cache_write_5m: float | None = None,
     price_per_mtok_cache_read: float | None = None,
-    thinking_declared: ThinkingDeclaration = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED,
+    thinking_declared: ThinkingDeclaration = (
+        ThinkingDeclaration.API_DEFAULT_PARAM_OMITTED
+    ),
 ) -> FreezeManifest:
     """Compone il manifest dal contenuto realmente congelato.
 
@@ -294,10 +296,15 @@ def build_freeze_manifest(
     esattamente come dichiarato. I tre campi restano `None`: "default dell'API"
     non deve mai essere confuso con "0" o con "non registrato".
 
-    `thinking_policy=api_default` è l'unico valore valido su Fable: il thinking
-    è **sempre attivo e non disattivabile**, e sia `{"type": "disabled"}` sia
-    `budget_tokens` producono 400. Anche qui la policy si realizza omettendo il
-    parametro.
+    `thinking_policy=api_default` è l'unico valore valido, e la policy si
+    realizza omettendo il parametro. **Correzione del 20/08/2026 (firma F11)**:
+    la frase che stava qui — «il thinking è sempre attivo e non disattivabile,
+    e sia `{"type": "disabled"}` sia `budget_tokens` producono 400» — era
+    scritta per `claude-fable-5` e **non vale** su `claude-opus-5`, dove la
+    sonda del rito del pin ha ottenuto **200** da `{"type": "disabled"}`.
+    Omettere il parametro resta la scelta pinnata, ma è una **scelta**
+    (`thinking_declared = api_default_param_omitted`), non un vincolo
+    constatato.
 
     `pin_commit`, `season_budget_usd`, `season_expected_days` e le quattro voci
     di listino (`price_per_mtok_*`) restano vuoti finché non li valorizza il

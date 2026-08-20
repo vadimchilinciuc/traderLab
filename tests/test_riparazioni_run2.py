@@ -460,7 +460,7 @@ def test_il_thinking_oscurato_conta_come_presente_e_il_testo_no():
 
 def test_payload_coerente_passa_e_payload_incoerente_viene_rifiutato():
     """A.7, la verifica a ogni chiamata, in entrambe le direzioni."""
-    omesso = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED
+    omesso = ThinkingDeclaration.API_DEFAULT_PARAM_OMITTED
     esplicito = ThinkingDeclaration.EXPLICIT_PARAM_SENT
 
     # Dichiarazione "parametro omesso": senza `thinking` passa, con no.

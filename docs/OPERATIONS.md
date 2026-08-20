@@ -114,6 +114,145 @@ un ripiego silenzioso:
 
 ---
 
+## 2-bis. Smoke live di pre-stagione
+
+**Cosa dimostra, e cosa no.** Una giornata completa contro l'API vera, con il
+modello della stagione, per verificare **una cosa sola**: che il protocollo
+regga: razionale in testo libero PRIMA, `submit_decision` DOPO (`CLAUDE.md`
+§8). Non è una giornata di stagione, non misura edge, non produce track
+record. È una precondizione al pin — il §13 passo 3 del
+`docs/PREREG_LAB_S0_RUN2.md` la pretende verde prima del primo giorno, come il
+§8 del `PREREG_LAB_S0` la pretendeva per la Stagione 0.
+
+**Fonte di questa procedura**: `tests/test_live_smoke.py`, che è il codice che
+la esegue, e la prassi della Stagione 0. Fino al 2026-08-20 la procedura non
+era trascritta qui e viveva solo nel codice e in un referto gitignorato: chi
+avesse clonato il repo non l'avrebbe trovata. Questa sezione chiude quel buco.
+
+### Il modello viene dal pin, mai da un default di modulo
+
+**È un principio, non la riparazione di un file** (decisione dell'owner del
+2026-08-20, rito PIN-BIS). Qualunque chiamata reale all'API prende la model
+string dal **Freeze manifest della stagione**, e mai da una costante di
+modulo.
+
+Il motivo è che una costante non ha modo di sapere quale modello è pinnato, e
+quindi **sopravvive in silenzio a un cambio di modello**. Nel Lab è successo
+due volte:
+
+- il listino stava fra le costanti di `ledger/spend.py`, fermo a
+  `claude-fable-5` ($10/$50) mentre TL-007 aveva pinnato `claude-opus-5`
+  ($5/$25): le guardie economiche contavano la spesa al doppio del vero.
+  Corretto da **TL-010**, che ha portato i quattro prezzi dentro il manifest;
+- `tests/test_live_smoke.py` costruiva il manifest con
+  `build_freeze_manifest(ASOF)`, ereditando `DEFAULT_MODEL_STRING` —
+  `claude-fable-5`. Eseguita alla lettera, la procedura di S0 avrebbe fatto lo
+  smoke di pre-stagione **sul modello sbagliato**: spesa su un modello non
+  pinnato, e nessuna prova sul modello che la stagione avrebbe usato davvero.
+
+Perciò il percorso del manifest si passa in `TRADERLAB_SMOKE_MANIFEST`, e da
+lì escono model string, `max_tokens`, `thinking_declared` e politica di
+caching. Se la variabile manca, lo smoke **fallisce** con un messaggio
+esplicito: non ripiega su un default, perché un default è il difetto.
+
+> **Pendenza dichiarata, non chiusa qui.** `DEFAULT_MODEL_STRING` in
+> `arena/config.py` vale ancora `claude-fable-5` ed è tuttora il default di
+> `build_freeze_manifest` e di `scripts/verify_pin.py --model`. È rimasto
+> intatto di proposito: cambiarlo dentro un rito di pin ne allargherebbe il
+> raggio oltre ciò che le firme coprono. La decisione è **post-pin**, e la
+> candidata è **eliminare il default** e rendere il modello sempre esplicito.
+
+### I comandi
+
+Lo smoke richiede **due** flag di ambiente più la chiave. Il primo sblocca le
+chiamate reali (`toolserver.config.live_api_allowed`), il secondo dice quale
+pin provare. Senza il primo il test risulta `skipped`, ed è il comportamento
+normale della suite:
+
+```bash
+# la suite normale: lo smoke e' SKIPPED, nessuna chiamata, nessun costo
+uv run pytest
+
+# lo smoke di pre-stagione: chiamate vere, costo vero
+TRADERLAB_ALLOW_LIVE_API=1 \
+TRADERLAB_SMOKE_MANIFEST=manifests/trader_v1_run2_freeze_manifest.json \
+uv run pytest tests/test_live_smoke.py -v -s
+```
+
+`-s` non è cosmetico: senza di esso `pytest` cattura lo stdout e **i numeri
+dello smoke non si vedono**. Il test stampa, e vanno trascritti nel referto:
+il modello letto dal pin, `max_tokens`, `thinking_declared`, le chiamate
+consumate sul `CallBudget`, e per ogni asset l'esito, l'azione, la confidenza
+e le `features_used`.
+
+`ANTHROPIC_API_KEY` si legge **solo** dall'ambiente (`CLAUDE.md` §0). Il file
+`.env` del repo non viene letto dal rito notturno — vedi §4, «Ambiente del
+task» — ma serve allo smoke se è la shell a caricarlo.
+
+### La marcatura `smoke`, e perché tiene fuori dal ledger di stagione
+
+Tre marcature, tutte con lo stesso valore letterale `smoke`, e una quarta
+protezione che è strutturale:
+
+| Dove | Valore | A cosa serve |
+| --- | --- | --- |
+| `ArenaConfig(replica_ids=("smoke",))` | `smoke` | una sola replica, non le tre di D1: lo smoke non è una giornata di stagione |
+| `runner.run_day(..., run_id="smoke")` | `smoke` | il `run_id` che finisce in ogni riga del ledger |
+| `ToolCallLog(..., run_id="smoke")` | `smoke` | il log delle tool call nasce sotto quel `run_id` |
+| percorso di ledger e log | `tmp_path` di `pytest` | **la protezione vera** |
+
+L'esclusione dal ledger di stagione **non è affidata a un'etichetta**: il test
+scrive in `tmp_path`, la cartella usa-e-getta di `pytest`, quindi in
+`tmp_path/ledger/smoke.jsonl` e `tmp_path/toolcalls/`. Il ledger di stagione è
+`data/ledger/season0.jsonl` (`arena/daily_ritual.py`,
+`DEFAULT_LEDGER_PATH`) e **non viene mai aperto**. Un'etichetta si può
+dimenticare; un percorso che non esiste nel repo no. È la stessa disciplina del
+§2 di `CLAUDE.md`: il vincolo sta nel codice, non nella buona volontà.
+
+Precedente storico, per chi legge i file: in `data/toolcalls/` restano
+`smoke-finale.jsonl` e `tl002.jsonl`, entrambi del 2026-08-13, che
+**precedono** le giornate di Stagione 0 e sono smoke, non giornate. Sono
+esclusi dai conteggi di stagione, e la cartella è gitignorata
+(`.gitignore`, `data/toolcalls/*`).
+
+### La verifica di retention, e quanto vale oggi
+
+In Stagione 0 lo smoke era **anche** la prova della configurazione di data
+retention dell'organizzazione, e lo era in modo forte: `claude-fable-5` non è
+disponibile sotto zero-data-retention, quindi con un workspace in ZDR **ogni**
+chiamata rispondeva 400 qualunque fosse il payload. Se lo smoke passava, la
+retention era a posto — non c'era altro modo di passare.
+
+**Su `claude-opus-5` la prova è più debole, e va detto.** La documentazione
+ufficiale (letta il 2026-08-20,
+`https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting`)
+elenca `Claude Fable 5` e `Claude Mythos 5` fra i modelli non disponibili in
+zero-data-retention, e **non** vi elenca `claude-opus-5`. Quindi uno smoke
+verde su Opus 5 dimostra che *quelle* chiamate sono state servite, non che il
+workspace sia configurato come si crede. La verifica «di fatto» resta quella
+che si può fare da qui — la chiamata passa, quindi la configurazione la
+permette — e non va riportata per più di quello che è.
+
+### Cosa si trascrive nel referto
+
+Token e costi non escono da un contatore del test: si leggono dal log delle
+tool call, che è la sede di verità (`CLAUDE.md` §9). Ogni riga
+`llm_complete` porta `usage` con `input_tokens`, `output_tokens`,
+`cache_creation_input_tokens`, `cache_read_input_tokens`, più
+`thinking_absent` e `thinking_tokens` (§A.7):
+
+```bash
+# le righe di usage dello smoke appena eseguito
+python -c "import json,sys,glob; [print(json.dumps(json.loads(r).get('usage'))) for f in glob.glob('<tmp_path>/toolcalls/*.jsonl') for r in open(f) if json.loads(r).get('tool')=='llm_complete']"
+```
+
+Il percorso di `tmp_path` lo stampa `pytest` stesso quando il test fallisce, e
+si ottiene comunque con `-s` e una `print`. Il costo in dollari si calcola con
+le quattro tariffe del **manifest** — mai con costanti di modulo, per la stessa
+ragione del §«Il modello viene dal pin».
+
+---
+
 ## 3. Exit code
 
 Sono dichiarati in `arena/daily_ritual.py` (`EXIT_MEANING`) e sono quelli che

@@ -137,8 +137,29 @@ memoria — regola 46.
   Sul modello pinnato i parametri di sampling non-default vengono rifiutati con
   400: il codice quindi **non invia** `temperature`, `top_p`, `top_k`. Questo è
   registrato nel manifest come scelta esplicita.
-- Stesso principio per `thinking`: sul modello pinnato è sempre attivo e non
-  disattivabile, quindi il parametro **non si invia**.
+- Stesso principio per `thinking`: il parametro **non si invia**, e il Lab
+  prende il default del fornitore. La riga che stava qui diceva
+  ~~«sul modello pinnato è sempre attivo e non disattivabile, quindi il
+  parametro non si invia»~~ e resta citata perché la correzione sia leggibile:
+  **è falsa su `claude-opus-5`**. Correzione datata **2026-08-20**, firma
+  **F11** dell'owner. Le due fonti che la impongono:
+
+  1. la sonda del rito del pin del 20/08/2026, riprodotta: su `claude-opus-5`
+     `thinking={"type": "disabled"}` risponde **200**, non 400;
+  2. la documentazione ufficiale, letta il 20/08/2026 —
+     `https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting`,
+     tabella «Configurations each model rejects»: «Claude Opus 5 … Default:
+     **On**», e «Models marked `Always on` cannot turn thinking off. Models
+     marked `On` default to thinking but **accept** `thinking: {type:
+     "disabled"}`». `claude-fable-5` è nella riga «Always on»; `claude-opus-5`
+     **no**.
+
+  Omettere il parametro resta la forma pinnata, ma è una **scelta di disegno**
+  — registrata nel manifest come `thinking_declared =
+  api_default_param_omitted` — non un vincolo constatato. Quale sia lo stato
+  interno del thinking il Lab **non lo osserva e non lo pinna**: è il default
+  del fornitore, e può cambiare senza preavviso. L'ignoranza è simmetrica con
+  la Stagione 0 e si dichiara invece di essere nascosta.
 - **Nessun fallback server-side.** Un rifiuto servito da un altro modello
   produrrebbe track record con un modello diverso da quello pinnato, in
   silenzio. Un rifiuto resta un rifiuto: visibile, loggato, contato a parte dai

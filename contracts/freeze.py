@@ -50,14 +50,36 @@ class ThinkingDeclaration(StrEnum):
     invariante verificabile a ogni chiamata. Il client confronta il payload
     che sta per inviare con questa dichiarazione e **rifiuta** se divergono —
     così una `thinking` comparsa nel payload per errore non passa in silenzio.
+
+    Quello che questa dichiarazione **non** afferma: che si sappia in che
+    stato il thinking giri. Dice solo cosa il payload contiene. Su un modello
+    che accetta più di una forma, "parametro omesso" è una scelta di disegno
+    e non la constatazione di un vincolo — vedi F11 qui sotto.
     """
 
-    # Il thinking è sempre attivo e non disattivabile: il parametro NON si
-    # invia. È l'unica forma valida sul modello pinnato in TL-002/TL-007.
-    ALWAYS_ON_PARAM_OMITTED = "always_on_param_omitted"
+    # Il parametro `thinking` NON si invia: si prende il default del
+    # fornitore, qualunque esso sia. Firma **F11** dell'owner (20/08/2026).
+    #
+    # Fino al 20/08/2026 questo membro si chiamava `ALWAYS_ON_PARAM_OMITTED`
+    # e valeva `"always_on_param_omitted"`, perché su `claude-fable-5`
+    # (pin TL-002) nessuna forma di `thinking` era accettata e l'omissione
+    # era un **vincolo dell'API**. La sonda del rito del pin del 20/08 ha
+    # accertato che su `claude-opus-5` (pin TL-007) `thinking={"type":
+    # "disabled"}` è **accettato** (200, riprodotto): «sempre attivo e non
+    # disattivabile» è falso su questo modello, e l'omissione torna a essere
+    # una **scelta**. Il payload non cambia — nessun blocco `thinking`, come
+    # in Stagione 0 — cambia ciò che il pin dichiara di sapere.
+    #
+    # Il valore entra nel `freeze_id`: la rinomina apre un segmento diverso
+    # da quello che la vecchia stringa avrebbe aperto, ed è voluto.
+    API_DEFAULT_PARAM_OMITTED = "api_default_param_omitted"
     # Il parametro `thinking` viene inviato esplicitamente. Non è il caso del
     # modello pinnato: esiste perché la dichiarazione sia un'alternativa vera
-    # e non un campo con un solo valore possibile.
+    # e non un campo con un solo valore possibile. L'alternativa
+    # `disabled_explicit` — inviare `{"type": "disabled"}` ora che il modello
+    # lo accetta — è stata **scartata** da F11: comprerebbe l'illusione di
+    # controllare uno stato che resta non osservabile, al prezzo di una
+    # variabile di protocollo in più rispetto a S0.
     EXPLICIT_PARAM_SENT = "explicit_param_sent"
 
 
@@ -90,7 +112,9 @@ class FreezeManifest(FrozenModel):
     # thinking. Il client la verifica a ogni chiamata (vedi
     # `ThinkingDeclaration`). Entra nel `freeze_id`: cambiarla è un cambio
     # del protocollo di chiamata, alla pari di `sampling_policy`.
-    thinking_declared: ThinkingDeclaration = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED
+    thinking_declared: ThinkingDeclaration = (
+        ThinkingDeclaration.API_DEFAULT_PARAM_OMITTED
+    )
 
     # --- Contenuti congelati ---
     system_prompt_sha: str = Field(pattern=r"^[0-9a-f]{64}$")

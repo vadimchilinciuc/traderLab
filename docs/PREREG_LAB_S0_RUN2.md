@@ -310,7 +310,7 @@ scelta pesa.
 | **Tier dichiarato** | **NON di punta** | R-B |
 | **`max_tokens`** | **8.000** | §A.1 |
 | **Sampling** | default dell'API **per omissione**: `temperature`, `top_p`, `top_k` **non inviati** | D4, `sampling_policy = api_default_omitted` |
-| **Thinking** | parametro **non inviato** | §A.7 + sonda T2 §7 |
+| **Thinking** | parametro **non inviato**, si prende il default del fornitore | §A.7 + sonda T2 §7 + **F11**, `thinking_declared = api_default_param_omitted` (§2.2) |
 | **Fallback server-side** | **assente**, di proposito | `CLAUDE.md` §10 |
 | **Repliche** | 3, identiche, input byte-identici, `replica_id` mai nel prompt | D1 |
 | **Size** | **fissa** a rischio unitario, normalizzata dal Risk Officer | D3 + §A.9 |
@@ -330,7 +330,16 @@ veniva scartato dallo shedding lato server nei picchi di carico.
 Il RUN2 dichiara **8.000**. La divergenza è già formalizzata in `DECISION_LOG`
 alla voce **TL-008**.
 
-### 2.2 Il thinking non è una preferenza, è un vincolo dell'API
+### 2.2 Il thinking: quello che sembrava un vincolo è per metà una scelta (F11)
+
+> **Questa sezione è stata riscritta dal rito PIN-BIS del 2026-08-20**, dopo
+> che il rito del pin dello stesso giorno ha misurato un reperto che il titolo
+> precedente — «Il thinking non è una preferenza, è un vincolo dell'API» —
+> rendeva falso per metà. Il testo precedente non è cancellato: è citato qui
+> sotto e corretto, perché una pre-registrazione che riscrive in silenzio la
+> propria motivazione non è una pre-registrazione.
+
+#### La superficie API, misurata
 
 La sonda del rito T2 (evidenza §7, quattro chiamate reali, `request_id`
 registrati) ha accertato che su `claude-opus-5`:
@@ -341,13 +350,102 @@ registrati) ha accertato che su `claude-opus-5`:
   «`thinking.type.enabled` is not supported for this model»;
 - controllo senza `thinking` → **200**.
 
-Quindi `thinking_declared = always_on_param_omitted` nel Freeze manifest
-**descrive un vincolo dell'API**, e il client verifica a ogni chiamata che il
-payload non contenga il parametro, rifiutando se lo contiene.
+**La sonda T2 non provò mai `type="disabled"`.** Il rito del pin del
+20/08/2026 l'ha provato, e ha misurato — due volte, non un transitorio:
 
-`output_config.effort` — la leva sostitutiva che l'API indica — **non è
-adottata**: sarebbe una variabile in più fra S0 e RUN2, e il RUN2 ne ha già
-quattro classi (§4). Registrata come opzione per una stagione successiva.
+- `thinking={"type":"disabled"}` → **200, accettato**.
+
+Il quadro completo, che è l'impronta con cui `scripts/verify_pin.py` confronta
+ogni esecuzione futura (`THINKING_BASELINE`, baseline datata 2026-08-20):
+
+| Payload | Esito su `claude-opus-5` | Fonte |
+| --- | --- | --- |
+| nessun `thinking` — **la forma pinnata** | **200** | sonda T2 §7; probe 2 del rito del pin |
+| `thinking.type = "enabled"` (budget 400 / 1024 / 16000) | **400** | sonda T2 §7 |
+| `thinking.type = "disabled"` | **200 — accettato** | rito del pin del 20/08, riprodotto |
+| `temperature = 0.7` | **400**, «`temperature` is deprecated…» | rito del pin, probe 2 |
+
+#### La documentazione ufficiale, trascritta (regola 50)
+
+Letta dal rito PIN-BIS il **2026-08-20**. Fonte:
+`https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting`,
+sezione «Configurations each model rejects». La riga di `claude-opus-5` e le
+due righe di confronto, trascritte:
+
+| Model | Thinking types | Default | Rejected with 400 |
+| --- | --- | --- | --- |
+| Claude Fable 5 | Adaptive only | **Always on** | `"enabled"`, `"disabled"` |
+| **Claude Opus 5** | **Adaptive only** | **On** | `"enabled"`, `"disabled"`² |
+| Claude Opus 4.8 | Adaptive only | Off | `"enabled"` |
+
+E le due frasi che la tabella porta come chiave di lettura, testuali:
+
+> «*² Claude Opus 5 accepts `"disabled"` at effort `high` or below; combining
+> it with effort `xhigh` or `max` returns a 400 error. This restriction applies
+> to Claude Opus 5 and later models and is enforced on each request.*»
+
+> «Models marked `Always on` cannot turn thinking off. Models marked `On`
+> default to thinking but accept `thinking: {type: "disabled"}`.»
+
+Dalla pagina `https://platform.claude.com/docs/en/build-with-claude/thinking`,
+stessa data:
+
+> «On Claude Opus 5, Claude Sonnet 5, Claude Fable 5, Claude Mythos 5, and
+> Claude Mythos Preview, thinking is already on: no configuration needed.»
+
+**Cosa la documentazione dice, e cosa NON dice.** *Dice* che a parametro omesso
+il default di `claude-opus-5` è «On», cioè thinking attivo in modalità
+adattiva; che `"disabled"` è **accettato** a effort `high` o inferiore, e che
+`high` è il default dell'API (pagina *Extended thinking*, stessa data: «`effort:
+"high"` matches the API default»); e che in modalità adattiva «Claude skips
+thinking on requests it judges simple enough to answer directly», cioè che
+**«on» non garantisce che il modello pensi a ogni chiamata**. *Non dice* quanto
+il modello pensi a parametro omesso, né come quella scelta sia presa, né
+garantisce che il default resti quello: è la configurazione del fornitore, non
+una proprietà pinnabile.
+
+La riga di `claude-fable-5` è **«Always on»**, quella di `claude-opus-5` è
+**«On»**. La differenza fra le due caselle è esattamente ciò che il pin
+TL-007 ha cambiato senza che il repo se ne accorgesse.
+
+#### La decisione F11, e l'alternativa scartata
+
+**F11** (owner, 20/08/2026, per delega esplicita).
+
+- **Payload: invariato.** Nessun blocco `thinking` nella chiamata, come in
+  Stagione 0. Non cambia una virgola di ciò che viene inviato.
+- **Dichiarazione: corretta.** `thinking_declared` passa da
+  `always_on_param_omitted` a **`api_default_param_omitted`**. La stringa
+  vecchia asseriva un fatto sul modello («è sempre attivo, non lo si può
+  spegnere») che su questo modello è falso; la nuova asserisce un fatto sul
+  **payload** («il parametro non si invia, si prende il default del
+  fornitore»), che è vero e verificabile a ogni chiamata.
+
+**L'alternativa `disabled_explicit`** — inviare `{"type":"disabled"}` ora che il
+modello lo accetta — è **scartata**, col motivo inciso: *accettato ≠ efficace*.
+Il Lab non ha modo di osservare lo stato interno del ragionamento, e pinnare
+una disattivazione esplicita comprerebbe l'illusione di controllarlo al prezzo
+di **una variabile di protocollo in più rispetto a S0** — che ne ha già
+sei (§4.2). L'oggetto di studio è il modello **come servito**, default incluso.
+
+**Conseguenza sul `freeze_id`.** `thinking_declared` entra nel payload canonico
+del manifest: la correzione della stringa **cambia il `freeze_id`**. È voluto e
+si dichiara — il segmento di track record del RUN2 nasce con la dichiarazione
+corretta, non con quella che il 20/08 mattina si sapeva già falsa.
+
+**Il controllo nel client non è indebolito, è rafforzato.** Su Fable, una
+`thinking` finita nel payload per errore veniva comunque fermata dall'API con
+un 400. Su Opus 5 **non più**: `"disabled"` passerebbe in silenzio, aprendo un
+protocollo di chiamata diverso da quello pinnato. La verifica
+`assert_thinking_coherent` (§A.7) è oggi l'**unica** cosa che lo impedisce.
+
+`output_config.effort` — la leva che l'API indica per governare la profondità
+del ragionamento — **non è adottata**: sarebbe una variabile in più fra S0 e
+RUN2, e il RUN2 ne ha già quattro classi (§4). Registrata come opzione per una
+stagione successiva. Si noti che la documentazione la lega al reperto qui
+sopra: `"disabled"` è accettato **solo** a effort `high` o inferiore, quindi
+adottare `effort` a `xhigh`/`max` renderebbe di nuovo il thinking non
+disattivabile — un'altra ragione per non toccarla dentro questa stagione.
 
 ---
 
@@ -506,7 +604,7 @@ strumentazione, il rito T3 ne ha prodotte altre due.
 | --- | --- | --- |
 | **P1** | **Il turno echo porta i soli `tool_use`, testo libero rimosso** (§B.3) | **La variabile più pesante del lotto.** Dal secondo turno in poi il modello **non rilegge più il proprio testo**. Effetto misurato: **8,8×** sul costo per chiamata (~$1,7809 → ~$0,2154) e percorso di raccolta dati **identico in 100 chiamate su 100** |
 | **P2** | `freeze_id` senza `context_git_sha`, con `pin_commit` | Non cambia il payload. **Cambia l'identità del segmento**: nessun `freeze_id` del RUN2 sarà confrontabile con quelli di S0 |
-| **P3** | `thinking_declared` nel manifest, verificato a ogni chiamata | Il payload non cambia. Esiste ora un invariante che può **rifiutare** una chiamata |
+| **P3** | `thinking_declared` nel manifest, verificato a ogni chiamata | Il payload non cambia. Esiste ora un invariante che può **rifiutare** una chiamata. **Annotazione F11 (20/08)**: il valore dichiarato è `api_default_param_omitted`, non `always_on_param_omitted` (§2.2). La correzione non tocca il payload ma **cambia il `freeze_id`**, ed è il motivo per cui l'invariante conta davvero: su `claude-opus-5` una `thinking` finita nel payload per sbaglio **non** verrebbe più fermata dall'API |
 | **P4** | Il runner **carica** il manifest committato invece di ricostruirlo | Non cambia il payload. **Cambia cosa può girare**: pre-pin, niente |
 | **P5** | Guardia dura sulla spesa di stagione (`1,5 ×` il preventivo) | Non cambia il payload. Può **interrompere** una stagione a metà: va dichiarato prima, non scoperto dopo |
 | **P6** | Il runner pretende **sei** termini economici firmati, non due | Aggiunta di questa bozza (TL-010). Pre-pin il runner rifiuta anche se preventivo e giornate ci sono ma il **listino** manca |
@@ -1227,6 +1325,25 @@ indipendenti.
     calibrazione di `p_accordo` inter-replica su decisioni long/short/flat su
     cripto. Le curve accordo → correttezza esistono solo per QA e ragionamento.
     Il RUN2 **è** l'esperimento, non la conferma di un risultato noto.
+17. **Lo stato del thinking non è pinnato e non è osservato** (§2.2, firma
+    F11). Il Freeze manifest congela ciò che il payload **contiene** — nessun
+    blocco `thinking` — non ciò che il modello **fa**. A parametro omesso
+    `claude-opus-5` gira sul default del fornitore, che la documentazione del
+    20/08/2026 dà come «On» in modalità adattiva e che il fornitore può
+    cambiare senza preavviso e senza che il `freeze_id` se ne accorga. La
+    stessa documentazione avverte che in modalità adattiva il modello «skips
+    thinking on requests it judges simple enough»: **«on» non significa «pensa
+    a ogni chiamata»**.
+
+    Il limite è **condiviso con la Stagione 0**, che girava sotto la stessa
+    ignoranza credendola un vincolo, e per questo non rompe la comparabilità
+    fra i due segmenti: quello che cambia il 20/08 è che l'ignoranza è
+    **dichiarata** invece che nascosta dietro una frase falsa.
+
+    Quanto il Lab osserva davvero, e va detto con precisione perché è meno di
+    quello che potrebbe: `thinking_absent` è misurato a **ogni** chiamata dai
+    blocchi della risposta (§A.7) ed è un dato vero; `thinking_tokens` resta
+    invece `None` **per un difetto del Lab, non dell'API** — vedi §15 punto 10.
 
 ---
 
@@ -1253,6 +1370,13 @@ del `PREREG_LAB_S0` lo era per la Stagione 0.
 La bozza del manifest è in
 **`manifests/trader_v1_run2_freeze_manifest.json`**, con tutti i campi del
 contratto enumerati e i segnaposto dichiarati nel blocco `_bozza`.
+
+**Passo 13, aggiunto il 2026-08-20 dal rito PIN-BIS**: `thinking_declared`
+valorizzato a **`api_default_param_omitted`** (firma **F11**, §2.2). Non era in
+questa checklist perché il reperto che lo impone — `thinking={"type":
+"disabled"}` accettato con 200 su `claude-opus-5` — è stato misurato **dopo**
+che la checklist era stata scritta, dal rito del pin che su quel rosso si è
+fermato. Muove il `freeze_id`, come i passi 5-7.
 
 ### 13.1 La profondità non è una stima: i testi, e le tre sedi (F9 + F9-bis)
 
@@ -1320,7 +1444,7 @@ modo che il conto sia verificabile da chiunque cloni il repo:
 
 ---
 
-## §14 — Il registro delle firme (F1…F10 + F9-bis, owner, 2026-08-20)
+## §14 — Il registro delle firme (F1…F11 + F9-bis, owner, 2026-08-20)
 
 Questa sezione **non elenca più punti aperti**: elenca le dieci decisioni con
 cui l'owner ha chiuso i nove `[DA-FIRMARE]` del rito T3, più il segnaposto che
@@ -1341,6 +1465,9 @@ rito T3-BIS.
 | **F9** | **`get_costs`**: la descrizione si corregge **al rito del pin**; è la variabile di contenuto **C3**; il testo proposto è al §13.1 e **non è applicato ora** | §4.3, §13, §13.1 | il n. 9 |
 | **F9-bis** | **La stessa correzione in TUTTE e tre le sedi**: descrizione dello schema di `get_costs` (C3), riga 35 di `agents/trader_v0/system_prompt.md` (**C4**, nuova), `contracts/vocabulary.py` riga 44 (igiene, non raggiunge il modello). Motivo inciso: correggere metà formulazione lascerebbe il modello a leggere una contraddizione | §4.3, §4.4, §13 passo 4, §13.1, §15 punto 9 | il n. 9 **per intero** |
 | **F10** | `rito_config.prereg_ref.commit` **resta un segnaposto** fino al rito del pin: è l'unico residuo legittimo | manifest; §13, passo 5 | — |
+| **F11** | **Thinking su `claude-opus-5`: payload invariato** (nessun blocco `thinking`, come S0), **dichiarazione corretta** da `always_on_param_omitted` a **`api_default_param_omitted`**. Motivo: la sonda del 20/08 mostra `disabled` **accettato** (200, riprodotto), quindi «sempre attivo e non disattivabile» è falso su questo modello; ma accettato ≠ efficace, e pinnare `disabled` esplicito comprerebbe un'illusione al prezzo di una variabile di protocollo in più rispetto a S0. L'alternativa `disabled_explicit` è **scartata** con questo motivo | §2.2, §4.2 riga P3, §12.2 punto 17, §15 punti 10-11; `contracts/freeze.py`, `arena/llm_client.py`, `arena/config.py`, `scripts/verify_pin.py`, `CLAUDE.md` §10 | il rosso del rito del pin |
+
+**F11 è firmata dopo le altre**, il 20/08/2026, per delega esplicita, dal prompt del rito PIN-BIS: le dieci firme precedenti chiudevano i `[DA-FIRMARE]` del rito T3, questa chiude un reperto che nessuno dei riti precedenti aveva misurato — perché nessuno aveva provato `thinking={"type":"disabled"}` su `claude-opus-5`.
 
 **L'unico segnaposto residuo, per esteso.** Nel Freeze manifest,
 `rito_config.prereg_ref.commit` vale `[DA-FIRMARE: il commit che congela il
@@ -1398,6 +1525,41 @@ Sezione mai vuota per compiacenza.
    igiene e non muove nulla. I testi e gli sha, prima e dopo, stanno al §13.1.
    Questa voce resta scritta perché il §15 registra ciò che un rito **non** ha
    potuto fare, e cancellarla riscriverebbe la storia del T3-BIS.
+
+10. **Il contatore dei token di ragionamento esiste nella documentazione, e
+    il Lab non lo legge.** Il §2.2 e il §7 dell'evidenza del preventivo
+    dicevano che «l'API non espone un contatore separato del ragionamento».
+    La pagina ufficiale *Extended thinking*
+    (`https://platform.claude.com/docs/en/build-with-claude/extended-thinking`,
+    letta il **2026-08-20**) dice invece: «*monitor the
+    `usage.output_tokens_details.thinking_tokens` field in the response, which
+    reports how many of the billed output tokens were internal reasoning*».
+    Il campo è **annidato**; `arena/llm_client.py` lo cerca soltanto fra gli
+    attributi di primo livello di `usage` (`thinking_tokens`,
+    `reasoning_tokens`, `reasoning_output_tokens`, funzione `_first_present`) e
+    quindi non lo troverebbe mai. `thinking_tokens = None` nella telemetria del
+    RUN2 va letto come **«il Lab non lo registra»**, non come «l'API non lo
+    espone»: l'ignoranza è nostra e sarebbe riparabile.
+
+    **Non riparato da questo rito, deliberatamente.** Cambiare cosa la
+    telemetria legge è una modifica di **classe S** (§4.1) e sta fuori dal
+    mandato di F11, che riguarda la sola dichiarazione. Ripararlo qui
+    avrebbe aggiunto una variabile di strumentazione al pin nell'ora in cui il
+    pin veniva firmato. Resta come pendenza dichiarata; il campo del contratto
+    è già pronto ad accoglierne il valore.
+
+    Va detto anche che, a differenza del contatore, l'osservabile
+    `thinking_absent` **funziona**: su `claude-opus-5` `display` vale per
+    default `"omitted"`, il che restituisce blocchi `thinking` con il campo
+    testuale vuoto — i blocchi ci sono, e `_has_thinking_blocks` li vede.
+
+11. **Che il default del fornitore resti quello che era il 20/08/2026.**
+    `scripts/verify_pin.py` fotografa la superficie API — quali forme del
+    parametro sono accettate — e uno scarto futuro è esito rosso. Ma la
+    fotografia **non copre lo stato interno**: il fornitore potrebbe cambiare
+    quanto il modello pensa a parametro omesso senza che nessuna delle tre
+    righe della baseline si muova. Nessun rito di questo repo può accorgersene,
+    e il RUN2 gira dichiarando che non se ne accorgerà.
 
 **Nota di metodo.** Tutte le derivazioni di questo documento sono state fatte
 **senza rete e senza API**: `scripts/run2_power.py` usa solo la libreria
