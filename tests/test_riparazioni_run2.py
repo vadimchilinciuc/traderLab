@@ -35,14 +35,19 @@ from arena.llm_client import (
     assert_thinking_coherent,
 )
 from arena.runner import DailyRunner, _to_params
-from arena.verbale import MalformedReason, is_true_malformed
-from contracts.decision import Action
+from arena.verbale import (
+    SUBMIT_DECISION_SCHEMA,
+    MalformedReason,
+    is_true_malformed,
+)
+from contracts.decision import Action, DecisionRecord, FeatureUsed
 from contracts.freeze import (
     PIN_COMMIT_PLACEHOLDERS,
     FreezeManifest,
     ThinkingDeclaration,
 )
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
+from contracts.vocabulary import FEATURE_NAMES, MAX_FEATURES_USED
 from contracts.snapshot import LiquidityEstimate
 from ledger.eprocess import KillCriterionConfig, KillVerdict, evaluate_kill_criterion
 from ledger.ops_ledger import (
@@ -1184,3 +1189,155 @@ def test_la_chiave_nuova_non_tocca_lo_sha_degli_schemi_dei_tool():
     mutati = [dict(s) for s in schemi]
     mutati[0] = {**mutati[0], "description": mutati[0]["description"] + " "}
     assert sha256_of(mutati) != all_tool_schemas_sha()
+
+
+# ==========================================================================
+# F12 — il tetto di `features_used` deriva dal vocabolario, e lo schema lo dice
+# ==========================================================================
+
+
+def _verbale_con(nomi) -> DecisionRecord:
+    """Un verbale valido in tutto, tranne per quante grandezze dichiara.
+
+    Si passa dalla **validazione**, non da `model_copy`: quest'ultimo non
+    rivalida, e un test costruito così proverebbe soltanto che pydantic sa
+    copiare un oggetto.
+    """
+    payload = make_decision("c" * 64).model_dump()
+    payload["features_used"] = [
+        FeatureUsed(name=n, value=float(i)).model_dump() for i, n in enumerate(nomi)
+    ]
+    return DecisionRecord.model_validate(payload)
+
+
+def test_il_tetto_di_features_used_e_il_vocabolario_e_oltre_si_rifiuta():
+    """F12, i due lati.
+
+    Il vocabolario espone 21 primitive e i nomi non si ripetono: un verbale
+    che le cita **tutte** è il massimo dichiarabile e deve passare. Una voce
+    in più non può che essere un nome ripetuto, e viene respinta.
+
+    Il lato che passa è quello che conta: prima del 2026-08-20 il tetto era un
+    **12** costante di origine non documentata, e questo stesso verbale — che
+    non viola nessuna regola del vocabolario — sarebbe stato rifiutato.
+    """
+    assert MAX_FEATURES_USED == len(FEATURE_NAMES) == 21
+
+    tutte = _verbale_con(FEATURE_NAMES)
+    assert len(tutte.features_used) == MAX_FEATURES_USED
+
+    with pytest.raises(ValidationError) as errore:
+        _verbale_con((*FEATURE_NAMES, FEATURE_NAMES[0]))
+    assert errore.value.errors()[0]["type"] == "too_long"
+
+
+def test_il_verbale_da_tredici_voci_dello_smoke_ora_passa():
+    """La regressione della trappola del rito PIN-BIS.
+
+    Lo smoke del 2026-08-20 su `claude-opus-5` produsse, su **entrambi** gli
+    asset, un verbale con **13** voci di `features_used`: valido in tutto il
+    resto, e rifiutato con «Tuple should have at most 12 items after
+    validation, not 13». Il difetto non era del modello — 13 nomi su 21
+    disponibili è un comportamento ragionevole — ma di un tetto che il Trader
+    non poteva leggere in nessun punto dello schema.
+
+    Sono i nomi a non contare qui: conta il **numero**, che è la grandezza su
+    cui la validazione cadeva.
+    """
+    tredici = _verbale_con(FEATURE_NAMES[:13])
+    assert len(tredici.features_used) == 13
+
+
+def test_lo_schema_dichiara_lo_stesso_tetto_che_il_contratto_applica():
+    """F12(b): il vincolo è conoscibile dove si decide, non solo dove respinge.
+
+    Due lati: lo schema porta il tetto ed è lo **stesso numero** del contratto
+    (se qualcuno ne cambiasse uno solo, questo test cade); e la descrizione lo
+    nomina, perché un `maxItems` in mezzo allo schema è più facile da mancare
+    di una frase nella riga che il modello legge.
+    """
+    features = SUBMIT_DECISION_SCHEMA["input_schema"]["properties"]["features_used"]
+    assert features["maxItems"] == MAX_FEATURES_USED
+
+    campo = DecisionRecord.model_fields["features_used"]
+    tetti = [m.max_length for m in campo.metadata if hasattr(m, "max_length")]
+    assert tetti == [MAX_FEATURES_USED]
+
+    assert str(MAX_FEATURES_USED) in features["description"]
+
+
+# ==========================================================================
+# F13 — il contatore del ragionamento è annidato, e si legge da lì
+# ==========================================================================
+
+
+class _DettagliOutput:
+    def __init__(self, thinking_tokens: int) -> None:
+        self.thinking_tokens = thinking_tokens
+
+
+class _UsageAnnidato(_UsageFinto):
+    """Un `usage` come quello che l'SDK espone: il contatore sta in un
+    sotto-oggetto `output_tokens_details`, non fra gli attributi di primo
+    livello."""
+
+    def __init__(self, thinking_tokens: int | None = None) -> None:
+        super().__init__()
+        if thinking_tokens is not None:
+            self.output_tokens_details = _DettagliOutput(thinking_tokens)
+
+
+def test_il_contatore_annidato_si_legge_e_la_sua_assenza_resta_assenza():
+    """F13, i due lati.
+
+    Presente: `usage.output_tokens_details.thinking_tokens` viene letto, ed è
+    il percorso che la documentazione ufficiale indica. Assente: il campo
+    resta `None` — «non registrato» — e `thinking_absent` continua a dire la
+    verità sui blocchi. **Mai uno zero al posto di una misura**: uno zero
+    direbbe «ha ragionato per zero token», che è un'affermazione diversa.
+
+    Prima del 2026-08-20 il client guardava solo il primo livello di `usage`:
+    nello smoke del rito PIN-BIS il contatore risultò `None` su tutte e 12 le
+    chiamate, e il repo ne dedusse che l'API non lo esponesse.
+    """
+    letto = _extract_usage(
+        _RispostaFinta(
+            content=[
+                {"type": "thinking", "thinking": "ragiono"},
+                {"type": "text", "text": "rispondo"},
+            ],
+            usage=_UsageAnnidato(thinking_tokens=1234),
+        )
+    )
+    assert letto is not None
+    assert letto.thinking_tokens == 1234
+    assert letto.thinking_absent is False
+
+    senza = _extract_usage(
+        _RispostaFinta(
+            content=[{"type": "text", "text": "rispondo e basta"}],
+            usage=_UsageAnnidato(),
+        )
+    )
+    assert senza is not None
+    assert senza.thinking_tokens is None
+    assert senza.thinking_absent is True
+
+
+def test_uno_zero_annidato_e_una_misura_e_si_legge_come_tale():
+    """Lo zero **vero** non va confuso con l'assenza, e viceversa.
+
+    Se l'API dichiara `thinking_tokens = 0` su una risposta senza blocchi di
+    thinking, quello è un dato: il modello non ha ragionato, e il contatore lo
+    dice. Deve arrivare come `0`, non come `None` — altrimenti la riparazione
+    di F13 avrebbe solo spostato il silenzio.
+    """
+    zero = _extract_usage(
+        _RispostaFinta(
+            content=[{"type": "text", "text": "x"}],
+            usage=_UsageAnnidato(thinking_tokens=0),
+        )
+    )
+    assert zero is not None
+    assert zero.thinking_tokens == 0
+    assert zero.thinking_absent is True

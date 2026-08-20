@@ -104,12 +104,13 @@ class LLMUsage:
 
     `thinking_tokens` e `thinking_absent` sono il verbale RUN2 §A.7: sul
     modello pinnato il ragionamento consuma lo stesso `max_tokens` della
-    risposta, e finché il costo del thinking non ha un campo suo è
-    indistinguibile dal costo del verbale. I due campi sono **sempre
-    presenti**: quando il payload non contiene blocchi di thinking,
-    `thinking_absent` vale True e l'assenza è un dato registrato, non un
-    silenzio. `thinking_tokens` resta `None` se l'API non espone un contatore
-    separato — `None` significa "non registrato", mai "zero token".
+    risposta, e il contatore dedicato dice quanti di quei token di output
+    erano ragionamento interno. I due campi sono **sempre presenti**: quando
+    il payload non contiene blocchi di thinking, `thinking_absent` vale True e
+    l'assenza è un dato registrato, non un silenzio. `thinking_tokens` resta
+    `None` se nessuno dei percorsi noti (`THINKING_TOKEN_PATHS`) esiste
+    sull'`usage` ricevuto — `None` significa "non registrato", mai "zero
+    token".
     """
 
     input_tokens: int | None
@@ -491,17 +492,17 @@ def _extract_usage(response: Any) -> LLMUsage | None:
     `Message`. Nessun campo -> `LLMUsage` assente, mai un usage a zero
     inventato.
 
-    `thinking_tokens` si legge dall'`usage` se l'API espone un contatore
-    dedicato; oggi sul modello pinnato non lo espone e il campo resta `None`.
+    `thinking_tokens` si legge dall'`usage`: prima nel sotto-oggetto
+    **annidato** `output_tokens_details`, che è dove la documentazione
+    ufficiale lo colloca, poi fra gli attributi di primo livello. Se non c'è
+    resta `None`, e `None` significa «non registrato», mai «zero token».
     `thinking_absent` invece si determina **sempre**, guardando i blocchi della
     risposta: è il dato che rende l'assenza esplicita (verbale RUN2 §A.7).
     """
     usage = getattr(response, "usage", None)
     if usage is None:
         return None
-    thinking_tokens = _first_present(
-        usage, ("thinking_tokens", "reasoning_tokens", "reasoning_output_tokens")
-    )
+    thinking_tokens = _thinking_tokens_of(usage)
     return LLMUsage(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
@@ -512,17 +513,41 @@ def _extract_usage(response: Any) -> LLMUsage | None:
     )
 
 
-def _first_present(obj: Any, names: tuple[str, ...]) -> int | None:
-    """Il primo attributo intero fra quelli indicati, altrimenti `None`.
+#: Dove l'API espone il contatore dei token di ragionamento, in ordine di
+#: ricerca. Il primo è il percorso **annidato** documentato ufficialmente —
+#: «monitor the `usage.output_tokens_details.thinking_tokens` field in the
+#: response, which reports how many of the billed output tokens were internal
+#: reasoning» (pagina *Extended thinking*, letta il 2026-08-20). Gli altri
+#: sono nomi di primo livello noti da versioni diverse dell'SDK.
+#:
+#: Fino al 2026-08-20 il client cercava **solo** i nomi di primo livello, e
+#: quindi non poteva trovarlo: nello smoke del rito PIN-BIS `thinking_tokens`
+#: è risultato `None` su tutte e 12 le chiamate, e la riga del repo che ne
+#: deduceva «l'API non espone un contatore» era falsa — l'ignoranza era del
+#: Lab. Firma **F13** dell'owner (2026-08-20). L'assenza continua a restare
+#: un'assenza dichiarata (§A.7): mai uno zero al posto di una misura.
+THINKING_TOKEN_PATHS: tuple[tuple[str, ...], ...] = (
+    ("output_tokens_details", "thinking_tokens"),
+    ("thinking_tokens",),
+    ("reasoning_tokens",),
+    ("reasoning_output_tokens",),
+)
 
-    L'elenco esiste perché il nome del contatore dei token di ragionamento non
-    è stabile fra le versioni dell'SDK: qui si leggono i nomi noti e si accetta
-    `None` — mai uno zero costruito a tavolino.
+
+def _thinking_tokens_of(usage: Any) -> int | None:
+    """Il contatore del ragionamento, cercato lungo i percorsi noti.
+
+    Restituisce il primo valore intero trovato; `None` se nessun percorso
+    esiste — che è un dato («non registrato»), non uno zero.
     """
-    for name in names:
-        value = getattr(obj, name, None)
-        if isinstance(value, int):
-            return value
+    for path in THINKING_TOKEN_PATHS:
+        node: Any = usage
+        for name in path:
+            node = getattr(node, name, None)
+            if node is None:
+                break
+        if isinstance(node, int) and not isinstance(node, bool):
+            return node
     return None
 
 

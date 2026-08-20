@@ -52,6 +52,20 @@ PRIMITIVE_FEATURES: MappingProxyType[str, str] = MappingProxyType(
 
 FEATURE_NAMES: tuple[str, ...] = tuple(sorted(PRIMITIVE_FEATURES))
 
+# Tetto al numero di voci di `features_used` in un verbale. È il vocabolario
+# stesso: `contracts.decision` vieta i nomi duplicati, quindi nessun verbale
+# può dichiarare più nomi di quanti ne esistano, e un tetto più basso sarebbe
+# un limite in più — che va allora dichiarato dove il verbale si scrive.
+#
+# Nasce qui, e non nel contratto, perché è un fatto sul vocabolario: chi
+# aggiunge una primitiva alza il tetto senza doversene ricordare, e il numero
+# non può più divergere dalla lista. Fino al 2026-08-20 il contratto portava
+# un **12** costante — origine non documentata — mentre il vocabolario esponeva
+# 21 nomi e lo schema del tool non dichiarava alcun tetto: lo smoke del rito
+# PIN-BIS ha misurato 13 voci citate e verbale rifiutato su entrambi gli asset.
+# Firma **F12** dell'owner (2026-08-20).
+MAX_FEATURES_USED: int = len(PRIMITIVE_FEATURES)
+
 
 def is_known_feature(name: str) -> bool:
     return name in PRIMITIVE_FEATURES

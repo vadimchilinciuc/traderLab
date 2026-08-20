@@ -236,14 +236,24 @@ permette — e non va riportata per più di quello che è.
 ### Cosa si trascrive nel referto
 
 Token e costi non escono da un contatore del test: si leggono dal log delle
-tool call, che è la sede di verità (`CLAUDE.md` §9). Ogni riga
-`llm_complete` porta `usage` con `input_tokens`, `output_tokens`,
-`cache_creation_input_tokens`, `cache_read_input_tokens`, più
-`thinking_absent` e `thinking_tokens` (§A.7):
+tool call, che è la sede di verità (`CLAUDE.md` §9). La chiave da leggere è
+**`meta`**, non `usage`: `ToolCallLog.record` scrive la telemetria della
+chiamata sotto `meta` (`toolserver/toollog.py`), e una riga di log non ha
+alcuna chiave `usage` — è `arena/llm_client.LLMUsage` a chiamarsi così, ed è
+un oggetto in memoria, non un campo del JSONL. Lo snippet qui sotto diceva
+`usage` fino al 2026-08-20 e restituiva quindi `null` per ogni riga: chiunque
+avesse seguito la procedura alla lettera avrebbe concluso che lo smoke non
+aveva registrato token. Correzione **F14** dell'owner, 2026-08-20; è la stessa
+chiave che legge `ledger/spend.py`.
+
+Ogni riga `llm_complete` porta in `meta` i campi `input_tokens`,
+`output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, più
+`attempts`, `duration_seconds` e — §A.7 — `thinking_absent` e
+`thinking_tokens`:
 
 ```bash
-# le righe di usage dello smoke appena eseguito
-python -c "import json,sys,glob; [print(json.dumps(json.loads(r).get('usage'))) for f in glob.glob('<tmp_path>/toolcalls/*.jsonl') for r in open(f) if json.loads(r).get('tool')=='llm_complete']"
+# le righe di telemetria dello smoke appena eseguito
+python -c "import json,glob; [print(json.dumps(json.loads(r).get('meta'))) for f in glob.glob('<tmp_path>/toolcalls/*.jsonl') for r in open(f) if json.loads(r).get('tool')=='llm_complete']"
 ```
 
 Il percorso di `tmp_path` lo stampa `pytest` stesso quando il test fallisce, e

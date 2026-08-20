@@ -19,7 +19,7 @@ from typing import Annotated, Self
 from pydantic import Field, field_validator, model_validator
 
 from contracts.base import FrozenModel, require_utc
-from contracts.vocabulary import is_known_feature
+from contracts.vocabulary import MAX_FEATURES_USED, is_known_feature
 
 # Testo minimo del razionale: sotto questa soglia non è uno scratchpad, è un
 # segnaposto. Soglia dichiarata qui, non nel prompt (CLAUDE.md §2).
@@ -80,7 +80,19 @@ class DecisionRecord(FrozenModel):
 
     # --- Ipotesi dichiarata (ordine: rationale PRIMA) ---
     rationale_text: str = Field(min_length=MIN_RATIONALE_CHARS)
-    features_used: tuple[FeatureUsed, ...] = Field(min_length=1, max_length=12)
+    # Tetto DERIVATO dal vocabolario (`contracts.vocabulary.MAX_FEATURES_USED`
+    # = len(PRIMITIVE_FEATURES)), non scritto a mano. Firma **F12**
+    # dell'owner, 2026-08-20: il valore precedente era un **12** costante di
+    # origine non documentata, mentre il vocabolario ne esponeva 21 e lo
+    # schema di `submit_decision` non dichiarava alcun tetto. Lo smoke del
+    # rito PIN-BIS ha misurato 13 voci citate su entrambi gli asset, e
+    # quindi due verbali rifiutati per un limite che il Trader non aveva
+    # modo di leggere. Un vincolo che respinge deve essere conoscibile dove
+    # si decide: il tetto è ora lo stesso numero nelle due sedi, e lo
+    # schema lo dichiara (`arena/verbale.py`, `maxItems`).
+    features_used: tuple[FeatureUsed, ...] = Field(
+        min_length=1, max_length=MAX_FEATURES_USED
+    )
     confidence: float = Field(ge=0.0, le=1.0)
     invalidation_conditions: tuple[str, ...] = Field(min_length=1, max_length=6)
     expected_holding: Horizon

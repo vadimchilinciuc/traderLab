@@ -447,6 +447,79 @@ sopra: `"disabled"` è accettato **solo** a effort `high` o inferiore, quindi
 adottare `effort` a `xhigh`/`max` renderebbe di nuovo il thinking non
 disattivabile — un'altra ragione per non toccarla dentro questa stagione.
 
+#### Lo smoke del rito PIN-BIS: le prime misure del Lab su `claude-opus-5`
+
+Il 2026-08-20 lo smoke live di pre-stagione (`OPERATIONS.md` §2-bis) ha
+prodotto **12 chiamate reali** sul modello pinnato, tutte andate a buon fine al
+primo tentativo. Sono i primi numeri che questo repo possiede su Opus 5, e
+vanno letti prima del pin perché due di essi hanno cambiato il pin.
+
+**Primo: il thinking a parametro omesso è adattivo, e ora è misurato.** Su 12
+chiamate, **8 hanno portato blocchi di thinking e 4 no**. Il default «On» non
+significa «pensa a ogni chiamata»: è esattamente il comportamento che la
+documentazione descrive («*Claude skips thinking on requests it judges simple
+enough to answer*»), e il Lab non lo deduce più da una pagina — lo ha
+osservato. Questo **non** cambia F11: il payload resta senza `thinking`, e lo
+stato interno resta non osservabile. Cambia il limite epistemico dichiarato,
+che va scritto per esteso: il thinking è **osservabile** — nei blocchi della
+risposta e, dopo F13, nel contatore dei token — e **non pinnabile**, perché il
+default del fornitore può cambiare senza preavviso.
+
+**Secondo: la trappola di `features_used`.** Tutte e 12 le chiamate hanno
+prodotto un blocco strutturato, e su **entrambi** gli asset il verbale è stato
+**rifiutato** in validazione:
+
+> `features_used` — *Tuple should have at most 12 items after validation, not 13*
+
+La causa non è il modello. Erano **due costanti divergenti e uno schema muto**:
+
+| Fatto | Valore | Sede |
+| --- | --- | --- |
+| Tetto applicato dal contratto | **12** | `contracts/decision.py`, `Field(max_length=12)`, origine non documentata |
+| Grandezze primitive esposte al Trader | **21** | `contracts/vocabulary.py`, `PRIMITIVE_FEATURES` |
+| Tetto **dichiarato** nello schema di `submit_decision` | **nessuno** | `arena/verbale.py`, `SUBMIT_DECISION_SCHEMA` |
+| Voci citate dal Trader | **13** | misurato, entrambi gli asset, anche al retry |
+
+Lo schema enumerava tutti e 21 i nomi ammessi e non nominava alcun tetto:
+citarne 13 era un comportamento ragionevole di chi legge quello schema. **Il
+vincolo esisteva dove respinge e non dove si può conoscere**, ed è una
+violazione dello spirito del §2 di `CLAUDE.md`. Il principio che ne resta,
+inciso qui perché valga oltre questo caso: **un vincolo che respinge deve
+essere conoscibile dove si decide.** Chiuso dalla firma **F12** (§14): il tetto
+del contratto è ora *derivato* dal vocabolario (21) e lo schema dichiara lo
+stesso numero in `maxItems` e nella descrizione. Il «12» si registra come
+**numero orfano** — nessuna decisione, nessun documento e nessun verbale ne
+attesta l'origine — accanto al precedente di questo stesso documento, il
+`budget_tokens: 400` con cui la sonda del rito T2 provò il thinking (§2.2,
+«La superficie API, misurata»): anche quel 400 non ha una fonte scritta, e si
+rivelò per giunta sotto il minimo di 1024 che l'API pretende. **Sono i numeri
+senza padre a costare di più**, perché nessuno sa se difenderli o cambiarli.
+La derivazione dissolve il 12; il 400 resta annotato, senza conseguenze,
+perché quella forma di `thinking` non è comunque inviabile su questo modello.
+
+Pinnato senza questa correzione, il RUN2 avrebbe prodotto `rejected_malformed`
+su ogni asset di ogni giorno: il gate §7(ii) sarebbe saltato al primo giorno e
+l'unità di conto del §3.1 non si sarebbe mai formata — zero coppie in 28
+giornate e $89,90 spesi per non misurare niente.
+
+**Terzo, e va tenuto separato dai primi due: la prima differenza di
+comportamento fra i due modelli, osservata.** Non era cercata, e non è un
+esito della stagione; è un reperto dello strumento.
+
+| Modello | Occasione | Voci di `features_used` |
+| --- | --- | --- |
+| `claude-fable-5` | Stagione 0, **16 verbali** in `data/ledger/season0.jsonl` | da **7** a **11**, mai al tetto |
+| `claude-opus-5` | smoke del 20/08, 2 asset | **13**, oltre il tetto, su entrambi |
+
+In Stagione 0 la trappola c'era e **non è mai scattata**, perché Fable
+sotto-dichiarava rispetto a quello che lo schema gli concedeva. Opus 5, sullo
+stesso schema, dichiara di più. È registrato qui e vale come materiale per
+l'**idea #6** (coerenza dichiarativa, `docs/IDEE_REGISTRATE.md`), non come
+misura: due asset di uno smoke non sono un campione, e il RUN2 non ha una
+gamba Fable con cui confrontarsi. Va detto anche il rovescio: da qui in avanti
+il tetto è 21, quindi il numero di voci non è più confrontabile fra S0 e RUN2
+nemmeno in linea di principio — il vincolo che le limitava era diverso.
+
 ---
 
 ## §3 — L'unità di conto e la potenza
@@ -594,9 +667,11 @@ esteso perché quel referto è gitignorato e non sopravvive a un clone.
 | S8 | `ledger/spend.py` come sede unica del listino | Nessuno: nessun numero cambiato, solo spostato |
 | **S9** | **Il listino esce da `ledger/spend.py` ed entra nel Freeze manifest** (TL-010, 20/08) | Nessuno sull'agente. **Cambia la spesa contata**: le costanti erano quelle di Fable ($10/$50) mentre il modello pinnato è Opus 5 ($5/$25), e le guardie contavano il **doppio**. Con il preventivo firmato (§8.3) la soglia dura sarebbe scattata al **giorno 21** invece che al 42 |
 | **S10** | **`MANIFEST_S0.json` fra i `DEFAULT_OTS_TARGETS`** del controllo settimanale | Nessuno. Chiude un ancoraggio del record di S0 rimasto pending su tutti e quattro i calendar |
+| **S11** | **Il contatore dei token di ragionamento si legge dove l'API lo espone**: `usage.output_tokens_details.thinking_tokens`, annidato (firma **F13**, 20/08) | Nessuno sull'agente: il payload inviato non cambia di una virgola. **Cambia cosa la telemetria contiene**: in S0 `thinking_tokens` fu `None` ovunque e nel RUN2 porterà un numero quando l'API lo espone. Completa **S5**, che aveva creato il campo senza saperlo leggere. L'assenza resta un'assenza dichiarata: mai uno zero al posto di una misura |
 
 **S9 e S10 sono aggiunte di questa bozza**: il referto T1 elencava 8 voci di
-strumentazione, il rito T3 ne ha prodotte altre due.
+strumentazione, il rito T3 ne ha prodotte altre due. **S11 è del rito
+PIN-TER** (20/08), che ha riparato il difetto rilevato al §15 punto 10.
 
 ### 4.2 Classe P — protocollo di chiamata (cambia **come** si parla al modello)
 
@@ -620,9 +695,11 @@ strumentazione, il rito T3 ne ha prodotte altre due.
 
 | **C4** | **La riga 35 di `agents/trader_v0/system_prompt.md`**, corretta **al rito del pin** con la stessa sostanza di C3 (firma **F9-bis**) | **Cambia cosa il Trader legge**: quella riga sta nell'elenco degli strumenti dentro il system prompt, quindi in **ogni** chiamata di ogni replica. Il valore numerico **non cambia**. Muove **`system_prompt_sha`**, e quindi il `freeze_id`. Nasce insieme a C3 e per la sua stessa ragione: correggere una metà della formulazione lascerebbe il modello a leggerne l'altra metà, che dice il contrario |
 
+| **C5** | **Lo schema di `submit_decision` dichiara il tetto di `features_used`**: `maxItems` derivato dal vocabolario (21) più una riga di descrizione che lo nomina (firma **F12**, 20/08) | **Cambia cosa il Trader legge**: lo schema dei tool sta nel contesto di ogni chiamata. Muove **`tool_schemas_sha`** — da `ce844892…b0eb15` a `b2a5a844…52d20d` — e quindi il `freeze_id`, che al pin viene riscritto comunque. Non aggiunge un vincolo: **dichiara** quello che il contratto già applicava e che lo schema taceva (§2.2). Il tetto applicato **si alza** da 12 a 21, perché ora è derivato dal vocabolario invece di essere una costante scritta a mano |
+
 C1 e C2 sono autorizzate dal **punto 15** del foglio di `zeroPipes` del 19/08
 (§0.6); C3 dalla firma **F9** del 20/08, C4 dalla firma **F9-bis** dello stesso
-giorno.
+giorno, C5 dalla firma **F12** del rito PIN-TER.
 
 **Cosa NON è una variabile, e perché si dichiara lo stesso.** La firma F9-bis
 tocca una terza sede, `contracts/vocabulary.py` riga 44, dove la descrizione di
@@ -645,16 +722,24 @@ differenza sono **quattro**:
 1. **il modello** — `claude-fable-5` → `claude-opus-5` (TL-007);
 2. **il protocollo di chiamata** — P1…P6, di cui P1 (il turno echo
    normalizzato) è sostanziale;
-3. **il contenuto dello snapshot** — C1, C2, C3 e C4;
-4. **la strumentazione** — S1…S10, che non tocca l'agente ma **cambia i numeri
+3. **il contenuto dello snapshot** — C1, C2, C3, C4 e C5;
+4. **la strumentazione** — S1…S11, che non tocca l'agente ma **cambia i numeri
    che si leggono a valle**, in particolare il gate §7(ii).
 
-Sono **20 voci** in quattro classi. Ognuna è autorizzata: il modello da TL-007,
+Sono **22 voci** in quattro classi. Ognuna è autorizzata: il modello da TL-007,
 P1 dal §B.3, C1 e C2 dal punto 15 del foglio, C3 dalla firma F9, C4 dalla firma
-F9-bis, le altre dai riti T1 e T3. Ma
+F9-bis, C5 dalla firma F12, S11 dalla firma F13, le altre dai riti T1 e T3. Ma
 l'affermazione «una variabile sola» **non descrive più questa stagione**, e
 tenerla in piedi renderebbe il RUN2 un esperimento che dichiara un disegno
 diverso da quello che esegue.
+
+**Il conto, per esteso, perché il numero non è quello annunciato.** Il mandato
+del rito PIN-TER prevedeva la lista onesta «da 20 a 21», contando la sola
+aggiunta di **C5**. Le voci sono **22**, non 21: **F13** ne aggiunge una
+seconda, **S11**, che quel conteggio non includeva perché la firma la descrive
+per classe («classe S») e non per posizione. La divergenza si dichiara invece
+di aggiustare il totale al ribasso — una lista onesta che nasconde una voce per
+far tornare un numero annunciato è peggio della lista che non c'era.
 
 **Conseguenza dichiarata sulla lettura degli esiti.** Con quattro classi di
 differenza, un esito del RUN2 diverso da quello di S0 **non è attribuibile al
@@ -1354,7 +1439,7 @@ del `PREREG_LAB_S0` lo era per la Stagione 0.
 
 | # | Passo | Stato al 2026-08-20, dopo il rito T3-BIS |
 | --- | --- | --- |
-| 1 | **Questo documento committato.** I contenuti sono **firmati** (F1…F10, §14) e nel testo non resta nessun `[DA-FIRMARE]` | **manca il commit** |
+| 1 | **Questo documento committato.** I contenuti sono **firmati** (F1…F14, §14) e nel testo non resta nessun `[DA-FIRMARE]` | **manca il commit** |
 | 2 | `scripts/verify_pin.py` verde sulla string `claude-opus-5` contro l'endpoint | **manca** (richiede rete e API) |
 | 3 | Smoke live verde, retention verificata di fatto | **manca** |
 | 4 | **La parola «stimata» sulla profondità, corretta in tutte le sue sedi** — variabili di contenuto **C3** (descrizione dello schema di `get_costs`, muove `tool_schemas_sha`) e **C4** (riga 35 di `agents/trader_v0/system_prompt.md`, muove `system_prompt_sha`), più `contracts/vocabulary.py` riga 44 che non muove nulla. I testi sono al **§13.1** | **DECISO (F9 per C3, F9-bis per C4 e per l'igiene): si applica QUI, al pin.** Non applicata dalla bozza |
@@ -1377,6 +1462,19 @@ questa checklist perché il reperto che lo impone — `thinking={"type":
 "disabled"}` accettato con 200 su `claude-opus-5` — è stato misurato **dopo**
 che la checklist era stata scritta, dal rito del pin che su quel rosso si è
 fermato. Muove il `freeze_id`, come i passi 5-7.
+
+**Passi 14 e 15, aggiunti il 2026-08-20 dal rito PIN-TER.** Nascono dallo
+smoke del PIN-BIS, cioè dal passo 3 di questa stessa checklist: uno smoke che
+si limitasse a passare o fallire non li avrebbe prodotti.
+
+| # | Passo | Firma | Effetto sul pin |
+| --- | --- | --- | --- |
+| 14 | **Il tetto di `features_used` deriva dal vocabolario** (21) e lo schema di `submit_decision` lo **dichiara** (`maxItems` + una riga di descrizione) | **F12** | variabile di contenuto **C5**; muove `tool_schemas_sha` e quindi il `freeze_id` |
+| 15 | **Il contatore dei token di ragionamento si legge dal percorso annidato** `usage.output_tokens_details.thinking_tokens` | **F13** | variabile di strumentazione **S11**; **non** muove nessuno sha del pin — non tocca né i context file né gli schemi |
+
+Il passo 14 è **precondizione al passo 3**, non un suo seguito: senza di esso
+lo smoke resta rosso su entrambi gli asset, e il §13 passo 3 pretende lo smoke
+verde prima del pin.
 
 ### 13.1 La profondità non è una stima: i testi, e le tre sedi (F9 + F9-bis)
 
@@ -1442,9 +1540,19 @@ modo che il conto sia verificabile da chiunque cloni il repo:
 | `system_prompt_sha` | `7ccf9dc4fcecdd72dc122d522a73a97697b4d15ad9d9d8b33a9c2bdbfb6d4177` | `555d7fa52d1dffc0c0e6ee9f72d75c9ffbe0182675cfe4ded62e1e2f56145cef` |
 | `persona_sha` | `d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3` | invariato |
 
+**Poi è arrivata F12**, e `tool_schemas_sha` si è mosso una seconda volta, nello
+stesso rito e prima del pin. Il valore che il manifest porta — e che il timbro
+certifica — è l'**ultimo** della catena, non quello della riga qui sopra:
+
+| sha del pin | dopo F9/F9-bis | dopo F12 (valore pinnato) |
+| --- | --- | --- |
+| `tool_schemas_sha` | `ce8448924028390830645f4c6203fab2339a226dc6779b4d602090b9e2b0eb15` | `b2a5a8445de94060b3920d0e9322db0bd9195517ab58f6aca270b5947652d20d` |
+| `system_prompt_sha` | `555d7fa52d1dffc0c0e6ee9f72d75c9ffbe0182675cfe4ded62e1e2f56145cef` | invariato: F12 non tocca i context file |
+| `persona_sha` | `d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3` | invariato |
+
 ---
 
-## §14 — Il registro delle firme (F1…F11 + F9-bis, owner, 2026-08-20)
+## §14 — Il registro delle firme (F1…F14 + F9-bis, owner, 2026-08-20)
 
 Questa sezione **non elenca più punti aperti**: elenca le dieci decisioni con
 cui l'owner ha chiuso i nove `[DA-FIRMARE]` del rito T3, più il segnaposto che
@@ -1467,7 +1575,18 @@ rito T3-BIS.
 | **F10** | `rito_config.prereg_ref.commit` **resta un segnaposto** fino al rito del pin: è l'unico residuo legittimo | manifest; §13, passo 5 | — |
 | **F11** | **Thinking su `claude-opus-5`: payload invariato** (nessun blocco `thinking`, come S0), **dichiarazione corretta** da `always_on_param_omitted` a **`api_default_param_omitted`**. Motivo: la sonda del 20/08 mostra `disabled` **accettato** (200, riprodotto), quindi «sempre attivo e non disattivabile» è falso su questo modello; ma accettato ≠ efficace, e pinnare `disabled` esplicito comprerebbe un'illusione al prezzo di una variabile di protocollo in più rispetto a S0. L'alternativa `disabled_explicit` è **scartata** con questo motivo | §2.2, §4.2 riga P3, §12.2 punto 17, §15 punti 10-11; `contracts/freeze.py`, `arena/llm_client.py`, `arena/config.py`, `scripts/verify_pin.py`, `CLAUDE.md` §10 | il rosso del rito del pin |
 
+| **F12** | **Il tetto di `features_used` diventa DERIVATO dal vocabolario** (`len(PRIMITIVE_FEATURES)` = 21), e lo schema di `submit_decision` **dichiara** lo stesso numero (`maxItems` + una riga di descrizione). Ogni altra semantica di validazione resta intatta. Il **12** precedente è registrato come **numero orfano**, di origine non documentata, dissolto dalla derivazione. Principio inciso: *un vincolo che respinge deve essere conoscibile dove si decide* | §2.2, §4.3 riga C5, §4.4, §13 passo 14; `contracts/vocabulary.py`, `contracts/decision.py`, `arena/verbale.py` | il rosso dello smoke del rito PIN-BIS |
+| **F13** | **Il contatore dei token di ragionamento si legge dal percorso annidato** `usage.output_tokens_details.thinking_tokens`, dove la documentazione ufficiale lo colloca. L'assenza resta loggata **come assenza** (§A.7): mai uno zero al posto di una misura | §4.1 riga S11, §13 passo 15, §15 punto 10; `arena/llm_client.py` | il §15 punto 10 |
+| **F14** | **`OPERATIONS.md` §2-bis: lo snippet legge `meta`, non `usage`.** La telemetria della chiamata sta sotto la chiave `meta` del JSONL (`toolserver/toollog.py`), e una riga di log non ha alcuna chiave `usage`; la procedura, seguita alla lettera, restituiva `null` per ogni riga | `docs/OPERATIONS.md` §2-bis | un difetto della procedura scritta, non del codice |
+
 **F11 è firmata dopo le altre**, il 20/08/2026, per delega esplicita, dal prompt del rito PIN-BIS: le dieci firme precedenti chiudevano i `[DA-FIRMARE]` del rito T3, questa chiude un reperto che nessuno dei riti precedenti aveva misurato — perché nessuno aveva provato `thinking={"type":"disabled"}` su `claude-opus-5`.
+
+**F12, F13 e F14 sono firmate dallo stesso giorno, dal prompt del rito
+PIN-TER**, sempre per delega esplicita. Hanno in comune l'origine: **nessuna
+delle tre nasce da un ragionamento**, tutte e tre nascono da uno smoke live
+eseguito sul modello pinnato. F12 chiude un rosso che avrebbe reso la stagione
+inutile; F13 chiude una pendenza che il PIN-BIS aveva dichiarato e non toccato;
+F14 corregge una riga di procedura che nessuno aveva mai eseguito alla lettera.
 
 **L'unico segnaposto residuo, per esteso.** Nel Freeze manifest,
 `rito_config.prereg_ref.commit` vale `[DA-FIRMARE: il commit che congela il
@@ -1541,12 +1660,35 @@ Sezione mai vuota per compiacenza.
     RUN2 va letto come **«il Lab non lo registra»**, non come «l'API non lo
     espone»: l'ignoranza è nostra e sarebbe riparabile.
 
-    **Non riparato da questo rito, deliberatamente.** Cambiare cosa la
-    telemetria legge è una modifica di **classe S** (§4.1) e sta fuori dal
-    mandato di F11, che riguarda la sola dichiarazione. Ripararlo qui
+    **Non riparato dal rito PIN-BIS, deliberatamente.** Cambiare cosa la
+    telemetria legge è una modifica di **classe S** (§4.1) e stava fuori dal
+    mandato di F11, che riguarda la sola dichiarazione. Ripararlo lì
     avrebbe aggiunto una variabile di strumentazione al pin nell'ora in cui il
-    pin veniva firmato. Resta come pendenza dichiarata; il campo del contratto
-    è già pronto ad accoglierne il valore.
+    pin veniva firmato.
+
+    **CHIUSA dalla firma F13** (owner, 2026-08-20, rito PIN-TER).
+    `arena/llm_client.py` legge ora il percorso annidato
+    `usage.output_tokens_details.thinking_tokens`, e ripiega sui nomi di primo
+    livello solo se quello manca (`THINKING_TOKEN_PATHS`). La riparazione è la
+    variabile di strumentazione **S11** (§4.1) e **non muove nessuno sha del
+    pin**: non tocca né i context file né gli schemi dei tool. Due test a due
+    lati la coprono — contatore presente letto, contatore assente registrato
+    come assenza — più un terzo che distingue lo **zero misurato** dal
+    `None` non registrato, perché una riparazione che confondesse i due
+    avrebbe solo spostato il silenzio.
+
+    Il limite epistemico si aggiorna di conseguenza, e va scritto per esteso:
+    il thinking è **osservabile** — nei blocchi della risposta (misurato: 8
+    chiamate su 12, §2.2) e ora nel contatore dei token — ma **non
+    pinnabile**: lo stato interno resta il default del fornitore, che può
+    cambiare senza preavviso e che nessuna riga di questo repo fotografa. La
+    dichiarazione **F11 resta invariata**: il parametro non si invia, e
+    `thinking_declared` vale `api_default_param_omitted`. Osservare quanto un
+    modello ha ragionato non è controllarlo, e il punto 11 qui sotto resta
+    aperto per intero.
+
+    Questa voce non si cancella: il §15 registra ciò che un rito **non** ha
+    potuto fare, e il PIN-BIS davvero non poté farlo.
 
     Va detto anche che, a differenza del contatore, l'osservabile
     `thinking_absent` **funziona**: su `claude-opus-5` `display` vale per

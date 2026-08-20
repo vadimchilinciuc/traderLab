@@ -31,7 +31,7 @@ from contracts.decision import (
     Horizon,
 )
 from contracts.hashing import sha256_of
-from contracts.vocabulary import FEATURE_NAMES
+from contracts.vocabulary import FEATURE_NAMES, MAX_FEATURES_USED
 
 SUBMIT_TOOL_NAME = "submit_decision"
 
@@ -83,9 +83,18 @@ SUBMIT_DECISION_SCHEMA: dict[str, Any] = {
             },
             "features_used": {
                 "type": "array",
+                # `maxItems` DERIVATO dallo stesso numero che il contratto
+                # applica (`contracts.decision`, `MAX_FEATURES_USED`). Firma
+                # **F12**: lo schema dichiara esattamente ciò che il contratto
+                # respinge, né più né meno. Prima del 2026-08-20 non dichiarava
+                # alcun tetto mentre il contratto ne applicava uno più basso
+                # del vocabolario, e il verbale veniva rifiutato per un limite
+                # illeggibile da chi lo scriveva.
+                "maxItems": MAX_FEATURES_USED,
                 "description": (
                     "Grandezze del vocabolario primitivo che hanno determinato "
-                    "questa decisione, con il valore letto."
+                    "questa decisione, con il valore letto. "
+                    f"Al più {MAX_FEATURES_USED} voci, con nomi distinti."
                 ),
                 "items": {
                     "type": "object",
