@@ -114,6 +114,16 @@ class FreezeManifest(FrozenModel):
     # il multiplo dichiarato in `ledger.spend`. Assente = nessun preventivo
     # firmato: anche quello è un rifiuto, non un via libera.
     season_budget_usd: float | None = Field(default=None, gt=0.0)
+    # Giornate ATTESE della stagione: il denominatore del pro-rata che il
+    # controllo del mattino usa per l'allarme di ritmo. Sta qui e non in una
+    # costante di `ledger.spend` perché è un termine del pin, esattamente come
+    # `season_budget_usd`: numeratore e denominatore della stessa frazione
+    # devono essere firmati insieme. Un preventivo tarato su N giornate e un
+    # pro-rata calcolato su M != N produce una soglia che non corrisponde a
+    # nulla — e se M > N la soglia scende sotto la spesa attesa e l'allarme
+    # suona ogni giorno. Assente = nessun pro-rata firmato: il runner in
+    # `--live` rifiuta, come per `season_budget_usd`.
+    season_expected_days: int | None = Field(default=None, gt=0)
 
     # --- Caching (RITO CACHING) ---
     # Descrizione dei blocchi marcati con `cache_control`. Solo costo e

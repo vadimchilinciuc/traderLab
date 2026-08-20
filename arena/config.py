@@ -278,6 +278,7 @@ def build_freeze_manifest(
     context_git_sha: str | None = None,
     pin_commit: str = "",
     season_budget_usd: float | None = None,
+    season_expected_days: int | None = None,
     thinking_declared: ThinkingDeclaration = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED,
 ) -> FreezeManifest:
     """Compone il manifest dal contenuto realmente congelato.
@@ -294,10 +295,11 @@ def build_freeze_manifest(
     `budget_tokens` producono 400. Anche qui la policy si realizza omettendo il
     parametro.
 
-    `pin_commit` e `season_budget_usd` restano vuoti finché non li valorizza il
-    **rito del pin**: sono i due campi che trasformano una composizione di
-    prova in un pin di stagione. Un manifest composto qui senza di loro è
-    leggibile ma non fa girare niente — vedi `load_pinned_manifest`.
+    `pin_commit`, `season_budget_usd` e `season_expected_days` restano vuoti
+    finché non li valorizza il **rito del pin**: sono i tre campi che
+    trasformano una composizione di prova in un pin di stagione. Un manifest
+    composto qui senza di loro è leggibile ma non fa girare niente — vedi
+    `load_pinned_manifest` e `ledger.spend.check_season_terms`.
     """
     context = load_context(agent_dir)
     return FreezeManifest(
@@ -314,6 +316,7 @@ def build_freeze_manifest(
         context_git_sha=context_git_sha or current_git_sha(),
         pin_commit=pin_commit,
         season_budget_usd=season_budget_usd,
+        season_expected_days=season_expected_days,
         caching_policy=caching_policy,
         ots_pending=True,
     )

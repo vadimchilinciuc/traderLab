@@ -7,8 +7,10 @@
 # l'upgrade OTS settimanale sta li', non qui.
 #
 # Exit code (gli stessi di scripts/morning_check.py, piu' il 2 delle precondizioni):
-#   0  la giornata di stanotte e' nel ledger, rapporto scritto
-#   1  la giornata di stanotte NON e' nel ledger, avviso mostrato
+#   0  niente da segnalare sulla giornata di stanotte. Copre due casi: la
+#      giornata e' nel ledger e il rapporto e' scritto, oppure NON c'e' ma
+#      nessuna stagione e' attiva e quindi non era attesa.
+#   1  stagione attiva e giornata di stanotte assente dal ledger, avviso mostrato
 #   2  precondizione non soddisfatta — il controllo non e' partito
 #
 # Canale d'allarme (verbale RUN2 §A.6, decisione D3): su exit != 0 o su

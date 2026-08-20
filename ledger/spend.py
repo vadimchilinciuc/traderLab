@@ -59,12 +59,22 @@ TOKEN_KEYS: tuple[str, ...] = (
 HARD_STOP_MULTIPLIER = 1.5
 #: Oltre questo multiplo del pro-rata il controllo del mattino allerta.
 ALARM_MULTIPLIER = 1.25
-#: Giornate attese di una stagione. È il **cap di calendario** del verbale
-#: RUN2 §A.8 (42 giorni), l'unico numero di giornate già deciso; serve solo al
-#: pro-rata dell'allarme, non alla soglia dura, che è sull'intero preventivo.
-#: Parametrico ovunque venga usato: questo è un default dichiarato, non una
-#: costante nascosta.
-SEASON_EXPECTED_DAYS = 42
+
+# Le **giornate attese** della stagione non stanno più qui.
+#
+# Erano `SEASON_EXPECTED_DAYS = 42`, preso dal cap di calendario del verbale
+# RUN2 §A.8. Una costante di modulo però vive per conto suo: il preventivo si
+# firma al rito del pin e il denominatore del pro-rata restava qui, libero di
+# non corrispondergli. Il caso che rende la cosa concreta: se il preventivo è
+# tarato su **28** giornate e il pro-rata si calcola su **42**, la soglia
+# d'allarme vale `1,25 x preventivo x g/42`, cioè `0,83 x` la spesa attesa al
+# giorno `g` — sotto la spesa attesa. L'allarme suonerebbe **ogni giorno** di
+# una stagione perfettamente in linea col preventivo, e un allarme che suona
+# sempre insegna a ignorarlo.
+#
+# Numeratore e denominatore della stessa frazione si firmano insieme: entrambi
+# vivono nel Freeze manifest (`season_budget_usd`, `season_expected_days`) e
+# arrivano qui come argomenti. Vedi `check_season_terms`.
 
 
 # --------------------------------------------------------------------------
@@ -186,6 +196,59 @@ class BudgetVerdict:
         return self.threshold_usd is not None
 
 
+@dataclass(frozen=True, slots=True)
+class TermsVerdict:
+    """I termini economici della stagione ci sono tutti? `ok=False` è un no."""
+
+    ok: bool
+    season_budget_usd: float | None
+    season_expected_days: int | None
+    detail: str
+
+
+def check_season_terms(
+    season_budget_usd: float | None, season_expected_days: int | None
+) -> TermsVerdict:
+    """Il pin porta entrambi i termini economici? (D5)
+
+    Sono due, e servono entrambi: `season_budget_usd` è il numeratore della
+    soglia dura e del pro-rata, `season_expected_days` è il denominatore del
+    pro-rata. Il runner in `--live` li pretende tutti e due prima di chiamare
+    il modello — un preventivo senza denominatore non è un preventivo, è metà
+    di una frazione.
+
+    Elenca **tutti** i campi mancanti, non solo il primo: chi legge il rifiuto
+    deve poter valorizzarli in una passata sola invece di scoprirne uno per
+    volta a ogni tentativo.
+    """
+    mancanti: list[str] = []
+    if season_budget_usd is None:
+        mancanti.append("season_budget_usd")
+    if season_expected_days is None:
+        mancanti.append("season_expected_days")
+    if mancanti:
+        return TermsVerdict(
+            ok=False,
+            season_budget_usd=season_budget_usd,
+            season_expected_days=season_expected_days,
+            detail=(
+                f"termini economici assenti dal Freeze manifest: "
+                f"{', '.join(mancanti)}. Si valorizzano al rito del pin (D5): "
+                f"finché mancano non esiste una soglia da rispettare e la "
+                f"giornata non parte."
+            ),
+        )
+    return TermsVerdict(
+        ok=True,
+        season_budget_usd=season_budget_usd,
+        season_expected_days=season_expected_days,
+        detail=(
+            f"preventivo di stagione ${season_budget_usd:.2f} su "
+            f"{season_expected_days} giornate attese"
+        ),
+    )
+
+
 def check_hard_stop(
     spend: SeasonSpend,
     season_budget_usd: float | None,
@@ -236,11 +299,16 @@ def check_hard_stop(
 def prorata_threshold_usd(
     season_budget_usd: float,
     days_executed: int,
-    expected_days: int = SEASON_EXPECTED_DAYS,
+    expected_days: int,
     *,
     multiplier: float = ALARM_MULTIPLIER,
 ) -> float:
-    """`multiplier` x (preventivo x giornate_eseguite / giornate_attese)."""
+    """`multiplier` x (preventivo x giornate_eseguite / giornate_attese).
+
+    `expected_days` non ha default: viene dal Freeze manifest, e un default
+    qui sarebbe di nuovo una costante nascosta che può divergere dal
+    preventivo firmato.
+    """
     if expected_days <= 0:
         raise ValueError("expected_days deve essere positivo")
     prorata = season_budget_usd * days_executed / expected_days
@@ -251,7 +319,7 @@ def check_prorata_alarm(
     spend: SeasonSpend,
     season_budget_usd: float | None,
     *,
-    expected_days: int = SEASON_EXPECTED_DAYS,
+    expected_days: int | None,
     multiplier: float = ALARM_MULTIPLIER,
 ) -> BudgetVerdict:
     """Allarme di ritmo: la stagione sta bruciando più in fretta del pro-rata.
@@ -264,14 +332,17 @@ def check_prorata_alarm(
     supererebbe: con zero giornate però non c'è ancora un ritmo da giudicare,
     e l'esito è "ok" con il motivo scritto.
     """
-    if season_budget_usd is None:
+    if season_budget_usd is None or expected_days is None:
+        mancante = (
+            "season_budget_usd" if season_budget_usd is None else "season_expected_days"
+        )
         return BudgetVerdict(
             ok=False,
             spent_usd=spend.usd,
             threshold_usd=None,
             detail=(
-                "season_budget_usd assente dal Freeze manifest: non esiste un "
-                "pro-rata da confrontare (D5)."
+                f"{mancante} assente dal Freeze manifest: non esiste un "
+                f"pro-rata da confrontare (D5)."
             ),
         )
     if spend.days_executed <= 0:

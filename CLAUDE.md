@@ -196,6 +196,9 @@ sul testo ripulito: è il file che viene congelato.
 - Regola per il futuro: ogni timbro OTS si appone sui byte del **blob**
   (`git cat-file`), mai su una copia del working tree; ogni file da ancorare
   nasce coperto da `.gitattributes` **prima** dello stamp.
+- Gli artefatti da ancorare **nascono in `docs/` o in `manifests/`, mai nella
+  radice del repo**: la radice non è coperta da `-text` e un file che vi nasce
+  si materializza con i fine-riga della macchina, non con quelli del blob.
 
 ## Prima di una ricerca di letteratura
 

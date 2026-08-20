@@ -61,11 +61,19 @@ def _preflight_bloccato(**kwargs) -> PreflightResult:
     )
 
 
-def _scrivi_manifest(path: Path, *, season_budget_usd: float | None) -> Path:
+def _scrivi_manifest(
+    path: Path,
+    *,
+    season_budget_usd: float | None = None,
+    season_expected_days: int | None = None,
+    pin_commit: str = PIN,
+) -> Path:
+    """Un Freeze manifest su disco. `pin_commit` decide se la stagione e' attiva."""
     manifest = build_freeze_manifest(
         datetime.now(tz=timezone.utc),
-        pin_commit=PIN,
+        pin_commit=pin_commit,
         season_budget_usd=season_budget_usd,
+        season_expected_days=season_expected_days,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -115,9 +123,11 @@ def _controllo(tmp_path: Path, **kwargs):
         "preflight": _preflight_pronto,
         "env": {},
         "echo": False,
-        # Percorso inesistente: il passo del budget si salta con il motivo
-        # scritto nel log, e non e' quello che il test in questione prova.
-        "manifest_path": tmp_path / "manifest_inesistente.json",
+        # Manifest PINNATO ma senza termini economici: la stagione risulta
+        # ATTIVA — che e' il contesto in cui una giornata mancante e'
+        # un'anomalia — e il passo del budget si salta con il motivo scritto
+        # nel log, perche' non e' quello che il test in questione prova.
+        "manifest_path": _scrivi_manifest(tmp_path / "manifest_stagione.json"),
     }
     parametri.update(kwargs)
     return run_morning_check(**parametri)
@@ -221,51 +231,105 @@ def _giornata_costosa(tmp_path: Path, output_tokens: int) -> None:
     )
 
 
+#: Costo di una giornata "tipo" in questi test: 1.000.000 token di output al
+#: listino dichiarato in `ledger/spend.py` fanno esattamente 50 USD. Chiamarlo
+#: `D` permette di scrivere le soglie come multipli di una giornata invece che
+#: come numeri magici.
+D_USD = 50.0
+TOKEN_PER_GIORNATA = 1_000_000
+
+
 def test_allarme_sul_ritmo_di_spesa_e_silenzio_sotto_soglia(tmp_path):
-    """D5 dentro il controllo del mattino, i due lati.
+    """D5 dentro il controllo del mattino, i due lati, tarati sul preventivo.
 
-    Una giornata da 1.000.000 token di output costa $50 al listino dichiarato.
-    Con un preventivo di stagione da $42 su 42 giornate il pro-rata di una
-    giornata è $1 e la soglia d'allarme $1,25: $50 la sfonda. Con un preventivo
-    da $42.000 la soglia è $1.250 e $50 ci sta sotto.
+    Preventivo `28 x D` su **28** giornate attese: al giorno `g` il pro-rata
+    vale esattamente `g x D`, cioè la spesa attesa, e la soglia d'allarme vale
+    `1,25 x g x D`. Qui `g = 1`.
+
+    - spesa `1,0 x D` → **nessun allarme**: la stagione è in linea;
+    - spesa `1,3 x D` → **allarme**: 1,3 supera 1,25.
+
+    **Perché le giornate attese devono venire dal manifest e non da una
+    costante.** Con lo stesso preventivo tarato su 28 giornate e un pro-rata
+    calcolato sulle 42 del cap di calendario, la soglia varrebbe
+    `1,25 x 28D x g/42 = 0,83 x g x D` — **sotto** la spesa attesa. Una
+    stagione perfettamente in linea col proprio preventivo suonerebbe
+    l'allarme ogni singolo giorno, e un allarme che suona sempre è un allarme
+    spento. Numeratore e denominatore si firmano insieme, al rito del pin.
     """
-    _giornata_costosa(tmp_path, output_tokens=1_000_000)
     atteso = alarm_path_for(OGGI, tmp_path / "repo")
+    preventivo = 28 * D_USD
+    attese = 28
 
-    stretto = _scrivi_manifest(tmp_path / "stretto.json", season_budget_usd=42.0)
-    sopra = _controllo(tmp_path, manifest_path=stretto)
-    assert sopra.budget_ok is False
-    assert sopra.alarm_raised
-    assert "ritmo di spesa" in atteso.read_text(encoding="utf-8")
-
-    atteso.unlink()
-
-    largo = _scrivi_manifest(tmp_path / "largo.json", season_budget_usd=42_000.0)
-    sotto = _controllo(tmp_path, manifest_path=largo)
+    # -- lato "in linea": spesa esattamente 1,0 x D al giorno 1 -------------
+    in_linea = tmp_path / "in_linea"
+    _giornata_costosa(in_linea, output_tokens=TOKEN_PER_GIORNATA)
+    manifest_in_linea = _scrivi_manifest(
+        in_linea / "manifest.json",
+        season_budget_usd=preventivo,
+        season_expected_days=attese,
+    )
+    sotto = _controllo(
+        tmp_path,
+        ledger_path=in_linea / "ledger" / "season0.jsonl",
+        toolcalls_dir=in_linea / "toolcalls",
+        manifest_path=manifest_in_linea,
+    )
     assert sotto.budget_ok is True
     assert not sotto.alarm_raised
     assert not atteso.exists()
 
+    # -- lato "in fretta": spesa 1,3 x D al giorno 1 ------------------------
+    in_fretta = tmp_path / "in_fretta"
+    _giornata_costosa(in_fretta, output_tokens=int(1.3 * TOKEN_PER_GIORNATA))
+    manifest_in_fretta = _scrivi_manifest(
+        in_fretta / "manifest.json",
+        season_budget_usd=preventivo,
+        season_expected_days=attese,
+    )
+    sopra = _controllo(
+        tmp_path,
+        ledger_path=in_fretta / "ledger" / "season0.jsonl",
+        toolcalls_dir=in_fretta / "toolcalls",
+        manifest_path=manifest_in_fretta,
+    )
+    assert sopra.budget_ok is False
+    assert sopra.alarm_raised
+    assert "ritmo di spesa" in atteso.read_text(encoding="utf-8")
 
-def test_senza_preventivo_il_passo_si_salta_invece_di_allarmare(tmp_path):
-    """D5: prima del rito del pin il preventivo non c'è, ed è la normalità.
 
-    Trasformarlo in un allarme quotidiano insegnerebbe all'owner a ignorare il
-    file — il modo più efficace di disattivare un allarme senza spegnerlo. Il
-    lato opposto: col preventivo presente la domanda si pone e la risposta
-    arriva.
+def test_senza_i_termini_economici_il_passo_si_salta_invece_di_allarmare(tmp_path):
+    """D5: prima del rito del pin i termini non ci sono, ed è la normalità.
+
+    I termini sono **due** — `season_budget_usd` e `season_expected_days` — e
+    la mancanza di uno solo basta a rendere il pro-rata indefinito. In tutti e
+    tre i casi mancanti il passo si salta con il motivo scritto nel log:
+    trasformarlo in un allarme quotidiano insegnerebbe all'owner a ignorare il
+    file, che è il modo più efficace di disattivare un allarme senza
+    spegnerlo. Il lato opposto: con entrambi i termini la domanda si pone e la
+    risposta arriva.
     """
     _giornata_costosa(tmp_path, output_tokens=1_000)
 
-    senza = _scrivi_manifest(tmp_path / "senza_budget.json", season_budget_usd=None)
-    esito_senza = _controllo(tmp_path, manifest_path=senza)
-    assert esito_senza.budget_ok is None
-    assert not esito_senza.alarm_raised
+    incompleti = {
+        "nessuno": {"season_budget_usd": None, "season_expected_days": None},
+        "solo_giornate": {"season_budget_usd": None, "season_expected_days": 28},
+        "solo_preventivo": {"season_budget_usd": 1_000.0, "season_expected_days": None},
+    }
+    for nome, termini in incompleti.items():
+        manifest = _scrivi_manifest(tmp_path / f"{nome}.json", **termini)
+        esito = _controllo(tmp_path, manifest_path=manifest)
+        assert esito.budget_ok is None, nome
+        assert not esito.alarm_raised, nome
 
-    con = _scrivi_manifest(tmp_path / "con_budget.json", season_budget_usd=1_000.0)
-    esito_con = _controllo(tmp_path, manifest_path=con)
-    assert esito_con.budget_ok is True
-    assert not esito_con.alarm_raised
+    completo = _scrivi_manifest(
+        tmp_path / "completo.json",
+        season_budget_usd=1_000.0,
+        season_expected_days=28,
+    )
+    esito_completo = _controllo(tmp_path, manifest_path=completo)
+    assert esito_completo.budget_ok is True
+    assert not esito_completo.alarm_raised
 
 
 def test_piu_motivi_finiscono_tutti_nello_stesso_file(tmp_path):
@@ -283,3 +347,95 @@ def test_piu_motivi_finiscono_tutti_nello_stesso_file(tmp_path):
     assert "prova forzata" in testo
     assert "exit 1" in testo
     assert "preflight NO" in testo
+
+
+# --------------------------------------------------------------------------
+# Consapevolezza della stagione
+# --------------------------------------------------------------------------
+#
+# Il rito notturno gira solo dentro una stagione. Fuori da una stagione e'
+# spento per costruzione, e i verbali che non produce non sono un'anomalia:
+# sono la normalita'. Prima di questa regola il controllo del mattino scriveva
+# un ALLARME al giorno per tutta la durata del cantiere, e un allarme che
+# suona ogni mattina insegna a non guardarlo — cioe' si disattiva da solo
+# senza che nessuno lo abbia spento.
+#
+# Cio' che NON cambia: ogni altra anomalia allarma comunque, dentro o fuori
+# stagione. Il preflight che dice NO e il ritmo di spesa oltre soglia
+# restano motivi validi.
+
+
+def _senza_stagione(tmp_path: Path) -> Path:
+    """Manifest leggibile ma NON pinnato: nessuna stagione attiva."""
+    return _scrivi_manifest(tmp_path / "non_pinnato.json", pin_commit="")
+
+
+def test_verbali_mancanti_allarmano_in_stagione_e_tacciono_fuori(tmp_path):
+    """I due lati della regola, a parita' di tutto il resto.
+
+    Stesso ledger vuoto, stesso preflight pronto, stesso giorno: cambia solo
+    se il manifest porta un `pin_commit` vero.
+    """
+    atteso = alarm_path_for(OGGI, tmp_path / "repo")
+
+    # -- lato "stagione attiva": la giornata manca ed e' un'anomalia --------
+    in_stagione = _controllo(tmp_path)  # manifest pinnato, vedi _controllo
+    assert in_stagione.season_active is True
+    assert in_stagione.exit_code == 1
+    assert in_stagione.alarm_raised
+    assert "exit 1" in atteso.read_text(encoding="utf-8")
+
+    atteso.unlink()
+
+    # -- lato "nessuna stagione": la stessa assenza non e' un'anomalia ------
+    fuori = _controllo(tmp_path, manifest_path=_senza_stagione(tmp_path))
+    assert fuori.season_active is False
+    assert fuori.day_found is False
+    assert fuori.exit_code == 0
+    assert fuori.alert_shown is None  # nessun avviso visibile mostrato
+    assert not fuori.alarm_raised
+    assert not atteso.exists()
+    assert "nessuna stagione attiva" in fuori.detail
+
+
+def test_fuori_stagione_le_altre_anomalie_allarmano_lo_stesso(tmp_path):
+    """La regola sospende UN motivo, non il canale.
+
+    Fuori stagione, con la stessa giornata mancante che sopra non allarma, un
+    preflight NO produce comunque il file — e ne produce **uno solo**, perche'
+    il motivo dei verbali mancanti non e' entrato nell'elenco.
+    """
+    atteso = alarm_path_for(OGGI, tmp_path / "repo")
+    fuori = _senza_stagione(tmp_path)
+
+    esito = _controllo(tmp_path, manifest_path=fuori, preflight=_preflight_bloccato)
+
+    assert esito.season_active is False
+    assert esito.exit_code == 0
+    assert esito.preflight_ready is False
+    assert esito.alarm_raised
+    assert len(esito.alarm_reasons) == 1
+    testo = atteso.read_text(encoding="utf-8")
+    assert "preflight NO" in testo
+    assert "exit 1" not in testo
+
+
+def test_un_manifest_illeggibile_vale_nessuna_stagione_e_lo_dichiara(tmp_path):
+    """Terzo caso: il manifest c'e' ma non si carica.
+
+    Assente, illeggibile o con `freeze_id` divergente sono la stessa risposta
+    — non c'e' una stagione — e la distinzione fra loro sta nel motivo, che
+    finisce nel log. Non e' un allarme: un manifest rotto e' un problema del
+    rito del pin, non della notte appena passata, e il runner lo rifiuta gia'
+    da se'.
+    """
+    rotto = tmp_path / "rotto.json"
+    rotto.write_text("{ questo non e' JSON", encoding="utf-8")
+
+    esito = _controllo(tmp_path, manifest_path=rotto)
+
+    assert esito.season_active is False
+    assert esito.exit_code == 0
+    assert not esito.alarm_raised
+    testo = esito.log_path.read_text(encoding="utf-8")
+    assert "stagione: nessuna" in testo

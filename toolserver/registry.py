@@ -298,12 +298,25 @@ class ToolRegistry:
         self, snapshot: MarketSnapshot, args: dict[str, Any]
     ) -> dict[str, Any]:
         asset = self._asset(snapshot, args)
+        # Foglio 19/08 punto 15, secondo tempo. Lo spread e' davvero stimato
+        # dal book e la chiave lo dice; la profondita' no — il builder ci
+        # mette la costante dichiarata di `snapshot_builder.DECLARED_DEPTH_USD`
+        # in entrambi i rami, e `LiquidityEstimate.depth_source` lo registra.
+        # La chiave esposta all'agente si chiamava `depth_usd_1pct_estimated`:
+        # un nome che dopo l'etichettatura del T1 **mente**, perche' dice
+        # "stimata" di un numero che e' una costante. Il nome onesto e'
+        # `depth_usd_1pct_declared`, coerente con `costante_dichiarata`.
+        #
+        # E' una variabile di CONTENUTO: cambia cosa il Trader legge, non solo
+        # come lo si misura. Va nella lista onesta del PREREG_LAB_S0_RUN2,
+        # stessa classe di `depth_source`. Non tocca `tool_schemas_sha`: lo
+        # schema di input di `get_costs` e' invariato, cambia solo la risposta.
         return {
             "symbol": asset.symbol,
             "maker_bps": asset.costs.maker_bps,
             "taker_bps": asset.costs.taker_bps,
             "spread_bps_estimated": asset.liquidity.spread_bps,
-            "depth_usd_1pct_estimated": asset.liquidity.depth_usd_1pct,
+            "depth_usd_1pct_declared": asset.liquidity.depth_usd_1pct,
             "estimator": asset.liquidity.estimator,
         }
 

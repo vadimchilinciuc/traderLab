@@ -10,12 +10,15 @@ e la registrazione del task, che le fa l'owner a mano
 
 from __future__ import annotations
 
+import json
 from collections import namedtuple
 from datetime import date, timezone
 from datetime import datetime as dt
+from pathlib import Path
 
 import pytest
 
+from arena.config import build_freeze_manifest
 from contracts.decision import Action
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
 from ledger.ops_ledger import OpsLedger
@@ -32,6 +35,7 @@ from tests.factories import make_decision
 
 OGGI = date(2026, 8, 17)  # un lunedi'
 SNAPSHOT_ID = "a" * 64
+PIN = "1a2b3c4"
 
 Completed = namedtuple("Completed", "returncode stdout stderr")
 
@@ -80,14 +84,58 @@ def _verdetto() -> RiskVerdict:
     )
 
 
+def scrivi_manifest(
+    path: Path,
+    *,
+    pin_commit: str = PIN,
+    season_budget_usd: float | None = None,
+    season_expected_days: int | None = None,
+) -> Path:
+    """Un Freeze manifest su disco, pinnato o no a seconda di `pin_commit`.
+
+    E' il documento che decide se una stagione e' ATTIVA: `pin_commit` vero
+    significa stagione in corso, segnaposto o file assente significa cantiere
+    fermo. I due termini economici restano opzionali perche' molti test non
+    hanno niente a che vedere con il ritmo di spesa.
+    """
+    manifest = build_freeze_manifest(
+        dt.now(tz=timezone.utc),
+        pin_commit=pin_commit,
+        season_budget_usd=season_budget_usd,
+        season_expected_days=season_expected_days,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "freeze_manifest": manifest.canonical_payload(),
+                "freeze_id": manifest.freeze_id,
+                "rito_config": {"nota": "documento sintetico per i test"},
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 @pytest.fixture
 def percorsi(tmp_path):
+    # Il manifest di default di questi test e' PINNATO: quasi tutti provano il
+    # comportamento del controllo *dentro* una stagione, dove una giornata
+    # mancante e' un'anomalia. I test che provano il caso opposto passano un
+    # `manifest_path` diverso, esplicitamente.
     return {
         "repo_root": tmp_path / "repo",
         "ledger_path": tmp_path / "ledger" / "season0.jsonl",
         "ops_path": tmp_path / "ledger" / "ops.jsonl",
         "log_dir": tmp_path / "logs",
         "toolcalls_dir": tmp_path / "toolcalls",
+        "manifest_path": scrivi_manifest(tmp_path / "manifest_stagione.json"),
+        "tmp_path": tmp_path,
     }
 
 
@@ -126,6 +174,7 @@ def _controllo(percorsi, **kwargs):
         "preflight": _preflight_pronto,
         "env": {},
         "echo": False,
+        "manifest_path": percorsi["manifest_path"],
     }
     parametri.update(kwargs)
     return run_morning_check(**parametri)

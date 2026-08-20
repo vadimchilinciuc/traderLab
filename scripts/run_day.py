@@ -16,10 +16,12 @@ RUN2 §A.2). Prima di qualunque chiamata al modello questo script:
    file;
 3. si ferma se `pin_commit` e' assente o e' un segnaposto — il rito del pin non
    e' avvenuto e non esiste una stagione da far girare;
-4. legge la **spesa cumulata di stagione** dal ledger e si ferma se supera la
+4. si ferma se il manifest non porta ENTRAMBI i termini economici della
+   stagione, `season_budget_usd` e `season_expected_days` (D5);
+5. legge la **spesa cumulata di stagione** dal ledger e si ferma se supera la
    soglia dura dichiarata in `ledger/spend.py` (D5).
 
-Ognuno dei quattro e' un rifiuto pulito con exit code 2, mai un ripiego.
+Ognuno dei cinque e' un rifiuto pulito con exit code 2, mai un ripiego.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ from arena.llm_client import (
     RETRYABLE_PROCESS_EXIT_CODE,
 )
 from arena.runner import DailyRunner
-from ledger.spend import check_hard_stop, season_spend
+from ledger.spend import check_hard_stop, check_season_terms, season_spend
 from ledger.telemetry import DailyDispersion
 from ledger.trader_ledger import TraderLedger
 from toolserver.config import ToolServerConfig, live_api_allowed
@@ -103,10 +105,26 @@ def main() -> int:
             print(f"ERRORE: manifest non utilizzabile — {exc}", file=sys.stderr)
             return 2
 
-        # D5. La spesa cumulata di stagione si legge dal ledger dei verbali (le
-        # giornate e i loro run_id) incrociato col log delle tool call (i
-        # token). Oltre la soglia dura non si gira: una guardia che avvisa e
-        # lascia partire non e' una guardia.
+        # D5, primo passo: il pin porta ENTRAMBI i termini economici?
+        # `season_budget_usd` e `season_expected_days` si firmano insieme al
+        # rito del pin. Il secondo stava in una costante di `ledger/spend.py`
+        # e poteva divergere dal primo in silenzio: adesso e' un campo del
+        # manifest e la sua assenza e' un rifiuto, esattamente come per il
+        # preventivo.
+        termini = check_season_terms(
+            manifest.season_budget_usd, manifest.season_expected_days
+        )
+        if not termini.ok:
+            print(
+                f"ERRORE: guardia economica di stagione — {termini.detail}",
+                file=sys.stderr,
+            )
+            return 2
+
+        # D5, secondo passo: la spesa cumulata di stagione si legge dal ledger
+        # dei verbali (le giornate e i loro run_id) incrociato col log delle
+        # tool call (i token). Oltre la soglia dura non si gira: una guardia
+        # che avvisa e lascia partire non e' una guardia.
         toolcalls_dir = (
             Path(args.toolcalls_dir) if args.toolcalls_dir else paths.toolcall_log_dir
         )
@@ -126,6 +144,7 @@ def main() -> int:
         print(f"thinking        : {manifest.thinking_declared.value} (§A.7)")
         print(f"pin_commit      : {manifest.pin_commit}")
         print(f"freeze_id       : {manifest.freeze_id}")
+        print(f"termini stagione: {termini.detail}")
         print(f"spesa stagione  : {verdetto.detail}")
 
         def factory(replica_id: str):

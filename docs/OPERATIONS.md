@@ -386,19 +386,35 @@ esisteva sul disco e non lo lanciava nessuno.
 (`arena`-style: il wrapper PowerShell è sottile, la logica sta nello script
 Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
 
-1. **Verifica la giornata di stanotte** (quella appena passata). Cerca nel
-   ledger dei verbali (`data/ledger/season0.jsonl`) la giornata corrispondente
-   a 00:00 UTC di oggi.
+1. **Verifica la giornata di stanotte** (quella appena passata), **ma solo se
+   una stagione è attiva**. Cerca nel ledger dei verbali
+   (`data/ledger/season0.jsonl`) la giornata corrispondente a 00:00 UTC di
+   oggi.
    - **Se c'è**: genera il rapporto del mattino (`scripts/morning_report.py`,
      vedi sotto) e lo appende a `data/logs/morning-<data>.log`. Exit 0.
-   - **Se non c'è**: mostra un avviso **visibile** sullo schermo (`msg.exe`,
-     con fallback a un popup PowerShell se `msg.exe` non è disponibile) con
-     il testo `traderLab: il rito di stanotte NON ha prodotto verbali -
-     controlla data/logs/daily-<data>.log`, e scrive lo stesso allarme nel
-     log del controllo. Exit 1. Un avviso che non riesce a comparire (es.
-     nessuna sessione interattiva) è annotato nel log ma **non** fa fallire
-     il controllo per quello: l'exit code racconta la giornata, non il
-     popup.
+   - **Se non c'è e una stagione è attiva**: mostra un avviso **visibile**
+     sullo schermo (`msg.exe`, con fallback a un popup PowerShell se
+     `msg.exe` non è disponibile) con il testo `traderLab: il rito di
+     stanotte NON ha prodotto verbali - controlla
+     data/logs/daily-<data>.log`, e scrive lo stesso allarme nel log del
+     controllo. Exit 1. Un avviso che non riesce a comparire (es. nessuna
+     sessione interattiva) è annotato nel log ma **non** fa fallire il
+     controllo per quello: l'exit code racconta la giornata, non il popup.
+   - **Se non c'è e nessuna stagione è attiva**: nessun avviso, nessun
+     allarme, exit 0, con il motivo scritto nel log. Fuori da una stagione il
+     rito notturno è spento per costruzione e i verbali che non produce non
+     sono un'anomalia: sono la normalità. Un allarme che suona ogni mattina
+     di un cantiere fermo insegna a non guardarlo, cioè si disattiva da solo
+     senza che nessuno l'abbia spento. **Ogni altra anomalia continua ad
+     allarmare** anche fuori stagione: il preflight che dice NO e il ritmo di
+     spesa oltre soglia restano motivi validi.
+
+   **Quando una stagione è «attiva»**: il Freeze manifest di default
+   (`manifests/trader_v0_freeze_manifest.json`, o quello passato con
+   `--manifest`) esiste, si carica, il suo `freeze_id` ricalcolato coincide, e
+   porta un `pin_commit` vero. Manifest assente, illeggibile, con `freeze_id`
+   divergente o non ancora pinnato valgono tutti **nessuna stagione**; quale
+   dei quattro sia lo dice il log.
 2. **Esegue il preflight della PROSSIMA passata** (`scripts/preflight.py`,
    vedi sotto), sempre, indipendentemente dall'esito del passo 1 — sono due
    notti diverse, ieri notte e stanotte. La tabella finisce nel log del
@@ -406,8 +422,12 @@ Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
    NO, mostra un **secondo** avviso visibile, distinto da quello del passo 1:
    `traderLab: stanotte NON partira' - <prima causa>`. Non tocca l'exit code
    del controllo, che resta determinato solo dal passo 1.
-3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei due file timbrati
-   (`manifests/trader_v0_freeze_manifest.json`, `docs/PREREG_LAB_S0.md`) via
+3. **Solo il lunedì**, tenta l'upgrade OpenTimestamps dei file elencati in
+   `DEFAULT_OTS_TARGETS` (`manifests/trader_v0_freeze_manifest.json`,
+   `docs/PREREG_LAB_S0.md`). `MANIFEST_S0.json`, che è il **terzo** file
+   timbrato del record di Stagione 0, **non è nell'elenco**: vedi il §8
+   punto 2 di
+   `docs/research/results/2026-08-20_PREREG-EVIDENCE_PREVENTIVO_RUN2.md`. Via
    `scripts/ots_stamp.py upgrade`, con `TRADERLAB_ALLOW_NETWORK=1` iniettato
    **solo** in quel sottoprocesso — stessa disciplina di rete del passo dello
    snapshot nel rito quotidiano (`CLAUDE.md` §7). Non è mai bloccante: se i
@@ -417,13 +437,21 @@ Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
 4. **Verifica il ritmo di spesa della stagione** (D5). Legge la spesa
    cumulata — le giornate e i `run_id` dal ledger dei verbali, i token dal log
    delle tool call — e la confronta con `1,25 ×` il pro-rata del preventivo
-   (`season_budget_usd` del Freeze manifest × giornate eseguite ÷ giornate
-   attese). Oltre soglia è un'anomalia. Non tocca l'exit code: la soglia che
-   **ferma** le cose è quella dura, `1,5 ×` il preventivo, e vive nel runner
-   (§2). Finché `season_budget_usd` non è valorizzato — cioè fino al rito del
-   pin — il passo si **salta** con il motivo scritto nel log, e non produce
-   allarmi: un allarme che scatta ogni giorno per una condizione normale
+   (`season_budget_usd` del Freeze manifest × giornate eseguite ÷
+   `season_expected_days` **dello stesso manifest**). Oltre soglia è
+   un'anomalia. Non tocca l'exit code: la soglia che **ferma** le cose è
+   quella dura, `1,5 ×` il preventivo, e vive nel runner (§2). I termini sono
+   **due** e si firmano insieme al rito del pin: finché ne manca anche uno
+   solo il passo si **salta** con il motivo scritto nel log, e non produce
+   allarmi — un allarme che scatta ogni giorno per una condizione normale
    insegna a ignorare il canale.
+
+   Le giornate attese stavano in una costante di `ledger/spend.py`
+   (`SEASON_EXPECTED_DAYS = 42`) e ora sono un campo del manifest. Il motivo è
+   aritmetico: con un preventivo tarato su 28 giornate e un pro-rata calcolato
+   su 42, la soglia varrebbe `0,83 ×` la spesa attesa, cioè **sotto** di essa,
+   e l'allarme suonerebbe ogni giorno di una stagione perfettamente in linea
+   col proprio preventivo.
 
 ### Il canale d'allarme: `ALLARME_<data>.txt`
 
@@ -445,7 +473,7 @@ I motivi che lo fanno comparire, nell'ordine in cui vengono elencati:
 | Motivo | Origine |
 | ------ | ------- |
 | `prova forzata …` | `--force-alarm`, vedi sotto |
-| `exit N — …` | la giornata di stanotte manca dal ledger (passo 1) |
+| `exit N — …` | stagione attiva e giornata di stanotte assente dal ledger (passo 1) |
 | `preflight NO per stanotte: …` | il preflight dice NO (passo 2) |
 | `ritmo di spesa oltre soglia (D5): …` | la cumulata sfonda il pro-rata (passo 4) |
 
@@ -578,13 +606,25 @@ Note che valgono quanto per il rito quotidiano (§4):
   d'ora, e non serve ancorarlo a UTC: "le 07:00" deve restare un orario
   sensato per aprire il laptop, non un istante di mercato.
 
-> **Stato operativo al 20/08/2026, da leggere prima di lasciarlo correre.**
-> Il task del controllo mattutino è **abilitato**; quello del rito quotidiano
-> è **disabilitato** dalla chiusura anticipata di Stagione 0 (`DECISION_LOG.md`,
-> TL-006). Finché resta così, ogni mattina alle 07:00 il controllo trova che
-> «il rito di stanotte NON ha prodotto verbali» — che è **vero** — ed esce 1,
-> scrivendo un `ALLARME_<data>.txt` al giorno. È rumore prevedibile, non un
-> guasto. Due chiusure possibili, entrambe dell'owner:
+> **Stato operativo al 20/08/2026, aggiornato dal rito T2.**
+> Il task del controllo mattutino è **abilitato** — `Enable-ScheduledTask`
+> eseguito il 20/08 su autorizzazione dell'owner, prossima esecuzione
+> 20/08/2026 07:00 locali. Quello del rito quotidiano resta **disabilitato**
+> dalla chiusura anticipata di Stagione 0 (`DECISION_LOG.md`, TL-006).
+>
+> Questa coppia **non produce più un allarme al giorno**. Prima del T2 il
+> controllo trovava ogni mattina che «il rito di stanotte NON ha prodotto
+> verbali» — che è vero — e usciva 1 scrivendo un `ALLARME_<data>.txt`. Ora
+> guarda prima se una stagione è attiva: il manifest di default non è
+> pinnato, quindi i verbali notturni **non sono attesi** e la loro assenza non
+> è più un motivo d'allarme (passo 1). Il canale resta acceso per tutto il
+> resto.
+>
+> Il controllo può quindi restare acceso da qui al rito del pin, che è la
+> ragione per cui è stato riacceso: dev'essere già in funzione — e già
+> osservato — quando la prima notte del RUN2 gira davvero. Le due chiusure
+> che il T1 aveva lasciato aperte restano disponibili ma non sono più
+> necessarie:
 >
 > ```powershell
 > # (a) sospendere il controllo fino al rito del pin

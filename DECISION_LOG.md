@@ -13,6 +13,7 @@ decisione che cambia si supera con una voce nuova, non si riscrive.
 | TL-006 | Stagione 0 chiusa anticipatamente per allocazione di budget | attiva |
 | TL-007 | Pin su Claude Opus 5 · supera il pin di TL-002 | attiva |
 | TL-008 | `max_tokens` = 8.000 · supera i 32.000 dichiarati in TL-002 | attiva |
+| TL-009 | Ancoraggi OTS di S0 · ratifica della via (b): si annota, non si riscrive | attiva |
 
 ---
 
@@ -402,3 +403,77 @@ da un segmento di track record aperto e da registrare con voce propria.
 **Fonti**: verbale RUN2, punto **A.1**; audit del 19/08/2026, divergenza
 **D5**; foglio delle 27 decisioni del 19/08 (`zeroPipes`,
 `docs/program/2026-08-19_VERBALE_FOGLIO_DECISIONI.md`), **punto 19**.
+
+---
+
+## TL-009 — Ancoraggi OTS della Stagione 0: ratifica della via (b)
+
+- **Data**: 2026-08-20
+- **Stato**: attiva
+- **Decisa da**: l'owner (Sanji), 20/08/2026.
+- **Supera**: nulla. È una voce nuova: nessuna decisione precedente si era
+  pronunciata su quali byte i tre timbri della Stagione 0 certifichino.
+
+**Contenuto**: dei tre ancoraggi OpenTimestamps del record di Stagione 0, due
+— `manifests/trader_v0_freeze_manifest.json` e `MANIFEST_S0.json` — furono
+timbrati sui byte del **working tree convertito** (CRLF), non sui byte del
+blob (LF). Il terzo, `docs/PREREG_LAB_S0.md`, fu timbrato sul blob e vi
+coincide. L'owner ratifica la **via (b)**: si annota, non si riscrive.
+
+**Le due vie, e perché è stata scelta questa.**
+
+| Via | Cosa avrebbe fatto | Esito |
+| --- | --- | --- |
+| (a) | ricommittare i due JSON con i fine-riga CRLF che furono timbrati | **scartata**: cambia il blob sha di un percorso di verdetto (`manifests/trader_v0_freeze_manifest.json`) e del manifesto degli hash del record (`MANIFEST_S0.json`), cioè grandezze che altri documenti già citano |
+| (b) | dichiarare quali byte sono timbrati e scrivere la ricetta che li ricostruisce da qualunque macchina | **ratificata** |
+
+**I tre digest timbrati**, trascritti qui per esteso perché il documento di
+evidenza è tracciato ma questa voce deve reggere da sola (convenzione delle
+evidenze di `CLAUDE.md`):
+
+| Target | digest timbrato (sha256) | si verifica su |
+| --- | --- | --- |
+| `docs/PREREG_LAB_S0.md` | `f0a22924a24fdd27f251d8da645664cc8fcf0e75607e2ca18388c4e1e41628d4` | i byte del **blob** |
+| `manifests/trader_v0_freeze_manifest.json` | `429186db0eabc30e5fbb55b5b402a59995d7756fb5eea33a251aa28a0f1b98e8` | `crlf(blob)` |
+| `MANIFEST_S0.json` | `ced493a7b3ea36168d6b3c7a4fe7aa81bfada0bd318928dd2a6d552cb8c27275` | `crlf(blob)` |
+
+Le due condizioni si escludono a vicenda: nessuna configurazione di checkout
+riproduce tutti e tre i timbri, e prima di questa ratifica l'unico posto al
+mondo in cui tornavano tutti e tre era il working tree dell'owner.
+
+**Dove sta l'evidenza.** Metodo, misure e ricetta di verifica per target
+stanno in `docs/research/results/2026-08-20_PREREG-EVIDENCE_ANCORAGGI_OTS_S0.md`,
+committato con **`6410880`** («docs(ots): ancoraggi S0 — evidenza, ricetta di
+verifica, .gitattributes»). Il §5 di quel documento è la ricetta: si lavora
+sui byte letti con `git cat-file blob`, e per i due JSON si applica la
+trasformazione LF→CRLF prima del confronto. Il confronto `sha256` è offline;
+`ots verify` richiede rete e si esegue fuori dai riti a rete vietata.
+
+**Cosa la ratifica porta con sé, in `.gitattributes`** (stesso commit
+`6410880`):
+
+- le sedi ancorate `docs/**` e `manifests/**` sono coperte da `-text`: ogni
+  file che vi nascerà si materializza in ogni clone con i byte del blob;
+- i due artefatti congelati e già timbrati restano l'**eccezione dichiarata**
+  (`text=auto`), perché sotto `-text` comparirebbero modificati in eterno e
+  nessuna `git add` sarebbe lecita su file congelati;
+- **sei eccezioni di eredità**, anch'esse `text=auto`: documenti `docs/**`
+  pre-esistenti, **non ancorati**, committati con blob LF e presenti nel
+  working tree con CRLF. Nessun timbro è in gioco per loro; sotto `-text`
+  comparirebbero come modificati senza che nulla sia cambiato, e il rumore
+  nasconderebbe le modifiche vere. Quando uno di essi verrà riscritto con
+  fine-riga LF, la sua riga di eccezione va rimossa e il file torna sotto
+  `-text`.
+
+**Cosa questa voce NON afferma**: che i timbri siano deboli. Certificano
+esattamente gli stessi byte di contenuto dei file committati — la differenza è
+soltanto un `CR` per riga, e la §3.1 dell'evidenza lo dimostra per entrambi i
+JSON nei due versi. Afferma soltanto che la verifica passa per una ricetta e
+non per un confronto diretto.
+
+**Regola per il futuro**, incisa in `CLAUDE.md`: ogni timbro OTS si appone sui
+byte del **blob** (`git cat-file`), mai su una copia del working tree; ogni
+file da ancorare nasce coperto da `.gitattributes` **prima** dello stamp, e
+nasce in `docs/` o in `manifests/`, mai nella radice del repo — la radice non
+è coperta da `-text`, ed è esattamente lì che stava `MANIFEST_S0.json` quando
+il caso si è prodotto.

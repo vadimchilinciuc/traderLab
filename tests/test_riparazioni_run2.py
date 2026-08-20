@@ -53,12 +53,15 @@ from ledger.spend import (
     SeasonSpend,
     check_hard_stop,
     check_prorata_alarm,
+    check_season_terms,
     estimate_cost_usd,
+    prorata_threshold_usd,
     season_spend,
 )
 from ledger.telemetry import DailyDispersion, daily_dispersion
 from ledger.trader_ledger import LedgerKey, TraderLedger
 from tests.factories import ASOF, make_decision, make_snapshot
+from toolserver.registry import ToolRegistry
 from toolserver.snapshot_builder import DECLARED_DEPTH_USD, SnapshotBuilder
 from toolserver.store import SnapshotStore
 from toolserver.toollog import LLM_COMPLETE_TOOL, ToolCallLog
@@ -697,25 +700,57 @@ def test_preventivo_assente_e_un_rifiuto_e_preventivo_presente_no():
     assert presente.has_budget
 
 
+#: Costo giornaliero di riferimento di questi test. Il preventivo si scrive
+#: come `GIORNATE_ATTESE x D_USD` e le spese come multipli di `D_USD`: cosi'
+#: le soglie si leggono in giornate invece che in numeri magici.
+D_USD = 12.50
+GIORNATE_ATTESE = 28
+
+
 def test_allarme_prorata_scatta_sopra_e_tace_sotto():
-    """D5, i due lati dell'allarme di ritmo (`1,25 x` il pro-rata)."""
-    preventivo = 420.0
-    attese = 42
-    eseguite = 10
-    prorata = preventivo * eseguite / attese  # 100.0
-    soglia = prorata * ALARM_MULTIPLIER  # 125.0
+    """D5, i due lati dell'allarme di ritmo, tarati sul preventivo firmato.
 
-    sotto = check_prorata_alarm(
-        _spesa(soglia - 0.01, eseguite), preventivo, expected_days=attese
-    )
-    assert sotto.ok
-    assert sotto.threshold_usd == pytest.approx(soglia)
+    Preventivo `28 x D` su **28** giornate attese: al giorno `g` il pro-rata
+    vale esattamente `g x D` — la spesa attesa — e la soglia `1,25 x g x D`.
+    Provato su tre giorni diversi, perche' la relazione deve reggere per ogni
+    `g` e non solo per uno:
 
-    sopra = check_prorata_alarm(
-        _spesa(soglia + 0.01, eseguite), preventivo, expected_days=attese
-    )
-    assert not sopra.ok
-    assert "piu' in fretta" in sopra.detail
+    - spesa `1,0 x g x D` → nessun allarme;
+    - spesa `1,3 x g x D` → allarme.
+
+    **Perche' le giornate attese vengono dal manifest e non da una costante di
+    questo modulo.** Erano `SEASON_EXPECTED_DAYS = 42`, il cap di calendario
+    del verbale RUN2 §A.8. Con un preventivo tarato su 28 giornate e un
+    pro-rata calcolato su 42, la soglia varrebbe
+    `1,25 x 28D x g/42 = 0,833 x g x D`: **sotto** la spesa attesa. Una
+    stagione perfettamente in linea col proprio preventivo suonerebbe
+    l'allarme il primo giorno e tutti i successivi — e un allarme che suona
+    sempre e' un allarme spento. Numeratore e denominatore della stessa
+    frazione si firmano insieme, al rito del pin.
+    """
+    preventivo = GIORNATE_ATTESE * D_USD  # 350.00
+
+    for g in (1, 7, 28):
+        atteso = g * D_USD
+        soglia = prorata_threshold_usd(preventivo, g, GIORNATE_ATTESE)
+        assert soglia == pytest.approx(ALARM_MULTIPLIER * atteso)
+
+        in_linea = check_prorata_alarm(
+            _spesa(atteso, g), preventivo, expected_days=GIORNATE_ATTESE
+        )
+        assert in_linea.ok, g
+        assert in_linea.threshold_usd == pytest.approx(soglia)
+
+        in_fretta = check_prorata_alarm(
+            _spesa(1.3 * atteso, g), preventivo, expected_days=GIORNATE_ATTESE
+        )
+        assert not in_fretta.ok, g
+        assert "piu' in fretta" in in_fretta.detail
+
+    # Contro-prova del motivo inciso sopra: con lo STESSO preventivo e il
+    # denominatore sbagliato (42), la spesa attesa sfonda la soglia al giorno 1.
+    sbagliato = check_prorata_alarm(_spesa(D_USD, 1), preventivo, expected_days=42)
+    assert not sbagliato.ok
 
 
 def test_a_zero_giornate_non_c_e_ritmo_e_a_una_giornata_c_e():
@@ -726,6 +761,67 @@ def test_a_zero_giornate_non_c_e_ritmo_e_a_una_giornata_c_e():
 
     una = check_prorata_alarm(_spesa(999.0, 1), 100.0, expected_days=42)
     assert not una.ok
+
+
+def test_i_termini_economici_ci_sono_entrambi_o_e_un_rifiuto():
+    """D5: `season_budget_usd` e `season_expected_days` si firmano insieme.
+
+    I due lati: entrambi presenti → si gira; uno qualsiasi assente → rifiuto,
+    con il nome del campo mancante dentro il motivo. Il rifiuto elenca
+    **tutti** i campi mancanti, non solo il primo, perche' chi lo legge deve
+    poterli valorizzare in una passata sola.
+    """
+    completo = check_season_terms(350.0, 28)
+    assert completo.ok
+    assert "350.00" in completo.detail and "28" in completo.detail
+
+    senza_preventivo = check_season_terms(None, 28)
+    assert not senza_preventivo.ok
+    assert "season_budget_usd" in senza_preventivo.detail
+    assert "season_expected_days" not in senza_preventivo.detail
+
+    senza_giornate = check_season_terms(350.0, None)
+    assert not senza_giornate.ok
+    assert "season_expected_days" in senza_giornate.detail
+
+    senza_niente = check_season_terms(None, None)
+    assert not senza_niente.ok
+    assert "season_budget_usd" in senza_niente.detail
+    assert "season_expected_days" in senza_niente.detail
+
+
+def test_il_manifest_porta_le_giornate_attese_e_le_lascia_assenti_di_default():
+    """Le giornate attese sono un campo del pin, non una costante di modulo.
+
+    I due lati: composto senza il campo resta `None` — e senza rito del pin è
+    la situazione normale; composto con il campo lo conserva, ed **entra nel
+    `freeze_id`**, perché cambiare il denominatore della soglia economica di
+    una stagione cambia la stagione.
+    """
+    senza = build_freeze_manifest(datetime.now(tz=timezone.utc), pin_commit=PIN)
+    assert senza.season_expected_days is None
+
+    con = build_freeze_manifest(
+        datetime.now(tz=timezone.utc), pin_commit=PIN, season_expected_days=28
+    )
+    assert con.season_expected_days == 28
+    assert con.freeze_id != senza.freeze_id
+
+    with pytest.raises(ValidationError):
+        build_freeze_manifest(
+            datetime.now(tz=timezone.utc), pin_commit=PIN, season_expected_days=0
+        )
+
+
+def test_il_prorata_senza_giornate_attese_non_e_una_soglia():
+    """D5: manca il denominatore → non esiste un pro-rata, e si dice.
+
+    Il lato opposto è già negli altri test: col denominatore la soglia c'è.
+    """
+    indefinito = check_prorata_alarm(_spesa(1.0, 1), 100.0, expected_days=None)
+    assert not indefinito.ok
+    assert not indefinito.has_budget
+    assert "season_expected_days assente" in indefinito.detail
 
 
 def test_la_spesa_di_stagione_somma_i_run_id_del_ledger(tmp_path):
@@ -917,3 +1013,67 @@ def test_asof_delle_factory_resta_quello_atteso():
 # ==========================================================================
 # A.6 / D3 — il canale d'allarme del controllo mattutino
 # ==========================================================================
+
+
+# ==========================================================================
+# Foglio 19/08 punto 15, secondo tempo — la chiave esposta all'agente
+# ==========================================================================
+#
+# Il T1 ha etichettato la profondita' dentro il contratto (`depth_source =
+# "costante_dichiarata"`) ma ha lasciato al Tool Server la chiave
+# `depth_usd_1pct_estimated`, che da quel momento **mente** all'agente: dice
+# "stimata" di un numero che e' una costante. Qui la chiave si chiama
+# `depth_usd_1pct_declared`.
+#
+# E' una variabile di CONTENUTO — cambia cosa il Trader legge — e va nella
+# lista onesta del PREREG_LAB_S0_RUN2, nella stessa classe di `depth_source`.
+
+
+def test_get_costs_espone_la_profondita_come_dichiarata_e_non_come_stimata(tmp_path):
+    """I due lati sulla stessa risposta: il nome onesto c'è, quello che mente no.
+
+    Lo spread resta `spread_bps_estimated` perché quello è davvero stimato dal
+    book: la riparazione riguarda la profondità, non tutto il blocco.
+    """
+    store = SnapshotStore(tmp_path / "snapshots")
+    log = ToolCallLog(tmp_path / "toolcalls", run_id="run-depth")
+    snapshot = make_snapshot()
+    store.save(snapshot)
+    registry = ToolRegistry(store, log)
+
+    risposta = registry.call(
+        snapshot_id=snapshot.snapshot_id,
+        replica_id="r1",
+        name="get_costs",
+        args={"symbol": "BTC"},
+    )
+
+    assert "depth_usd_1pct_declared" in risposta
+    assert "depth_usd_1pct_estimated" not in risposta
+    assert "spread_bps_estimated" in risposta
+
+    asset = next(a for a in snapshot.assets if a.symbol == "BTC")
+    assert risposta["depth_usd_1pct_declared"] == asset.liquidity.depth_usd_1pct
+    # La chiave e' coerente con la provenienza registrata nello snapshot: e'
+    # esattamente cio' che il nome vecchio contraddiceva.
+    assert asset.liquidity.depth_source == "costante_dichiarata"
+
+
+def test_la_chiave_nuova_non_tocca_lo_sha_degli_schemi_dei_tool():
+    """La rinomina sta nella RISPOSTA, non nello schema di input di `get_costs`.
+
+    Conta perché `tool_schemas_sha` entra nel `freeze_id`: se la riparazione
+    lo avesse mosso sarebbe stata una variabile di protocollo in più, non solo
+    di contenuto. Il lato opposto — che lo sha reagisca davvero a un cambio di
+    schema — è provato mutandone una copia.
+    """
+    from arena.config import all_tool_schemas, all_tool_schemas_sha
+    from contracts.hashing import sha256_of
+
+    schemi = all_tool_schemas()
+    costi = next(s for s in schemi if s["name"] == "get_costs")
+    assert "depth" not in json.dumps(costi["input_schema"], ensure_ascii=False)
+
+    mutati = [dict(s) for s in schemi]
+    mutati[0] = {**mutati[0], "description": mutati[0]["description"] + " "}
+    assert sha256_of(mutati) != all_tool_schemas_sha()

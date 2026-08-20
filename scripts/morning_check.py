@@ -7,12 +7,21 @@ esiste per il Lab. Tutta la logica sta qui.
 
 Il controllo fa tre cose, indipendenti tra loro:
 
-1. **Verifica la giornata di stanotte.** Se il ledger dei verbali contiene la
-   giornata corrispondente a 00:00 UTC di oggi, genera il rapporto del
-   mattino (`scripts/morning_report.py`) e lo appende a
-   `data/logs/morning-<data>.log`, exit 0. Se non la contiene, mostra un
-   avviso **visibile** all'utente (`msg.exe`, con fallback a un popup
-   PowerShell) e scrive l'allarme nello stesso log, exit 1.
+1. **Verifica la giornata di stanotte, ma solo se una stagione e' attiva.**
+   Se il ledger dei verbali contiene la giornata corrispondente a 00:00 UTC
+   di oggi, genera il rapporto del mattino (`scripts/morning_report.py`) e lo
+   appende a `data/logs/morning-<data>.log`, exit 0. Se non la contiene **e
+   una stagione e' attiva**, mostra un avviso **visibile** all'utente
+   (`msg.exe`, con fallback a un popup PowerShell) e scrive l'allarme nello
+   stesso log, exit 1.
+
+   Una stagione e' attiva quando il Freeze manifest di default esiste, si
+   carica e porta un `pin_commit` vero (`is_pinned`). Fuori da una stagione i
+   verbali notturni **non sono attesi**: il rito e' spento per costruzione, e
+   trasformare quella normalita' in un allarme quotidiano insegnerebbe
+   all'owner a ignorare il file — che e' il modo piu' efficace di
+   disattivare un allarme senza spegnerlo. Ogni **altra** anomalia continua
+   ad allarmare anche fuori stagione.
 2. **Esegue il preflight di stanotte** (`scripts/preflight.py`), sempre,
    indipendentemente dall'esito del punto 1: verifica di giorno le
    precondizioni della PROSSIMA passata del rito e appende la tabella al log
@@ -30,8 +39,10 @@ Il controllo fa tre cose, indipendenti tra loro:
    l'esito finisce nel log e il controllo prosegue.
 4. **Verifica il ritmo di spesa della stagione** (D5): se la spesa cumulata
    supera `ALARM_MULTIPLIER` volte il pro-rata del preventivo, è un'anomalia.
-   Non tocca l'exit code — la soglia che ferma le cose è quella dura, e vive
-   nel runner.
+   Numeratore e denominatore del pro-rata vengono **entrambi** dal Freeze
+   manifest (`season_budget_usd`, `season_expected_days`): se ne manca uno il
+   passo si salta con il motivo scritto nel log. Non tocca l'exit code — la
+   soglia che ferma le cose è quella dura, e vive nel runner.
 
 **Il canale d'allarme** (verbale RUN2 §A.6, decisione D3). Su exit ≠ 0 o su
 anomalia rilevata il controllo scrive `ALLARME_<data>.txt` alla radice del
@@ -59,8 +70,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arena.config import DEFAULT_MANIFEST_PATH, ManifestError, load_pinned_manifest
 from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH, RitualLog
+from contracts.freeze import FreezeManifest
 from ledger.ops_ledger import OpsLedger, recorded_days
-from ledger.spend import SEASON_EXPECTED_DAYS, check_prorata_alarm, season_spend
+from ledger.spend import check_prorata_alarm, check_season_terms, season_spend
 from ledger.trader_ledger import TraderLedger
 from scripts.morning_report import generate_report
 from scripts.preflight import PreflightResult, format_table, run_preflight
@@ -69,9 +81,17 @@ from toolserver.config import ToolServerConfig
 EXIT_OK = 0
 EXIT_NO_VERBALI = 1
 
+#: Significato dei due exit code. Sono **grossolani** per costruzione: il
+#: wrapper PowerShell e il Task Scheduler leggono un numero, non una frase. Il
+#: dettaglio di cosa e' successo sta in `MorningCheckResult.detail`, che
+#: finisce nel log e nel file d'allarme. Exit 0 copre due casi diversi ma
+#: entrambi senza niente da segnalare: la giornata c'e', oppure non c'e' e non
+#: era attesa perche' nessuna stagione e' attiva.
 EXIT_MEANING: dict[int, str] = {
-    EXIT_OK: "la giornata di stanotte e' nel ledger, rapporto scritto",
-    EXIT_NO_VERBALI: "la giornata di stanotte NON e' nel ledger, avviso mostrato",
+    EXIT_OK: "niente da segnalare sulla giornata di stanotte",
+    EXIT_NO_VERBALI: (
+        "stagione attiva e giornata di stanotte assente dal ledger, avviso mostrato"
+    ),
 }
 
 DEFAULT_LOG_DIR = Path("data/logs")
@@ -186,6 +206,10 @@ class MorningCheckResult:
     alarm_file: Path | None = None
     alarm_reasons: tuple[str, ...] = ()
     budget_ok: bool | None = None
+    #: Una stagione e' attiva? Vero solo se il Freeze manifest esiste, si
+    #: carica e porta un `pin_commit` vero. Fuori stagione i verbali notturni
+    #: non sono attesi e la loro assenza non e' un'anomalia.
+    season_active: bool = False
 
     @property
     def meaning(self) -> str:
@@ -213,7 +237,6 @@ def run_morning_check(
     preflight=default_preflight_check,
     echo: bool = True,
     manifest_path: Path | str = DEFAULT_MANIFEST_PATH,
-    expected_days: int = SEASON_EXPECTED_DAYS,
     force_alarm: bool = False,
 ) -> MorningCheckResult:
     """Esegue il controllo del mattino e ritorna l'esito. Non solleva.
@@ -234,6 +257,15 @@ def run_morning_check(
     day_found = today in recorded_days(trader_ledger)
     alert_shown: bool | None = None
 
+    # Il manifest si legge UNA volta: serve a due domande diverse — "c'e' una
+    # stagione attiva?" e "con quali termini economici?" — e leggerlo due
+    # volte permetterebbe alle due risposte di divergere.
+    manifest, manifest_detail = _load_manifest_quiet(manifest_path)
+    season_active = manifest is not None and manifest.is_pinned
+    log.write(
+        f"stagione: {'ATTIVA' if season_active else 'nessuna'} — {manifest_detail}"
+    )
+
     if day_found:
         log.write(f"giornata di stanotte ({today.isoformat()}) presente nel ledger")
         report = generate_report(
@@ -242,6 +274,19 @@ def run_morning_check(
         log.block("rapporto del mattino", report)
         exit_code = EXIT_OK
         detail = "giornata di stanotte presente"
+    elif not season_active:
+        # Fuori stagione i verbali notturni non sono attesi: il rito e' spento
+        # per costruzione. Nessun avviso, nessun allarme, nessun exit code
+        # diverso da zero — un allarme che suona ogni mattina di un cantiere
+        # fermo e' un allarme che l'owner impara a non guardare, ed e' la
+        # stessa ragione per cui il passo del budget si salta invece di
+        # allarmare quando il preventivo non c'e' ancora.
+        detail = (
+            f"nessuna stagione attiva ({manifest_detail}): i verbali di "
+            f"stanotte non sono attesi e la loro assenza non e' un'anomalia"
+        )
+        log.write(detail)
+        exit_code = EXIT_OK
     else:
         daily_log = f"data/logs/daily-{today.isoformat()}.log"
         message = (
@@ -293,8 +338,8 @@ def run_morning_check(
     budget_ok, budget_detail = _check_budget_rhythm(
         trader_ledger=trader_ledger,
         toolcalls_dir=toolcalls_dir,
-        manifest_path=manifest_path,
-        expected_days=expected_days,
+        manifest=manifest,
+        manifest_detail=manifest_detail,
         log=log,
     )
 
@@ -349,44 +394,76 @@ def run_morning_check(
         alarm_file=alarm_file,
         alarm_reasons=tuple(reasons),
         budget_ok=budget_ok,
+        season_active=season_active,
     )
+
+
+def _load_manifest_quiet(
+    manifest_path: Path | str,
+) -> tuple[FreezeManifest | None, str]:
+    """Carica il Freeze manifest senza pretendere il pin, senza sollevare.
+
+    Ritorna `(manifest, motivo)`. Un manifest assente, illeggibile o con
+    `freeze_id` divergente da' `(None, motivo)`: per il controllo del mattino
+    tutti e tre significano la stessa cosa — **non c'e' una stagione** — e la
+    distinzione fra loro sta nel motivo, che finisce nel log.
+
+    Un manifest che si carica ma non e' ancora pinnato torna comunque
+    (`is_pinned` sara' falso): e' un documento valido, semplicemente non e'
+    ancora un pin di stagione.
+    """
+    try:
+        manifest = load_pinned_manifest(manifest_path, require_pin=False)
+    except ManifestError as exc:
+        return None, f"manifest non utilizzabile: {exc}"
+    if not manifest.is_pinned:
+        return manifest, (
+            f"manifest {manifest_path} leggibile ma non pinnato "
+            f"(pin_commit={manifest.pin_commit!r})"
+        )
+    return manifest, f"pin_commit={manifest.pin_commit}"
 
 
 def _check_budget_rhythm(
     *,
     trader_ledger: TraderLedger,
     toolcalls_dir: Path,
-    manifest_path: Path | str,
-    expected_days: int,
+    manifest: FreezeManifest | None,
+    manifest_detail: str,
     log: RitualLog,
 ) -> tuple[bool | None, str]:
     """La stagione sta bruciando piu' in fretta del pro-rata? (D5)
 
     Ritorna `(None, motivo)` quando la domanda **non si pone**: manifest
-    assente, non ancora pinnato, o senza `season_budget_usd`. Prima del rito
-    del pin è la situazione normale, e trasformarla in un allarme quotidiano
-    insegnerebbe all'owner a ignorare il file — che è il modo più efficace di
-    disattivare un allarme senza spegnerlo.
+    assente o illeggibile, oppure senza uno dei due termini economici
+    (`season_budget_usd`, `season_expected_days`). Prima del rito del pin è la
+    situazione normale, e trasformarla in un allarme quotidiano insegnerebbe
+    all'owner a ignorare il file — che è il modo più efficace di disattivare
+    un allarme senza spegnerlo.
+
+    Il manifest arriva **già caricato**: e' lo stesso oggetto che ha deciso se
+    una stagione e' attiva, e rileggerlo qui permetterebbe alle due risposte
+    di divergere.
 
     La soglia che **ferma** le cose non è questa: è quella dura, in
     `scripts/run_day.py`. Questa sveglia soltanto.
     """
-    try:
-        manifest = load_pinned_manifest(manifest_path, require_pin=False)
-    except ManifestError as exc:
-        log.write(f"ritmo di spesa: manifest non leggibile, controllo saltato — {exc}")
-        return None, str(exc)
+    if manifest is None:
+        log.write(f"ritmo di spesa: controllo saltato — {manifest_detail}")
+        return None, manifest_detail
 
-    if manifest.season_budget_usd is None:
-        log.write(
-            "ritmo di spesa: season_budget_usd non ancora valorizzato nel "
-            "manifest (si valorizza al rito del pin, D5) — controllo saltato"
-        )
-        return None, "season_budget_usd assente dal Freeze manifest"
+    termini = check_season_terms(
+        manifest.season_budget_usd, manifest.season_expected_days
+    )
+    if not termini.ok:
+        log.write(f"ritmo di spesa: controllo saltato — {termini.detail}")
+        return None, termini.detail
 
     spesa = season_spend(trader_ledger=trader_ledger, toolcalls_dir=toolcalls_dir)
     verdetto = check_prorata_alarm(
-        spesa, manifest.season_budget_usd, expected_days=expected_days
+        spesa,
+        manifest.season_budget_usd,
+        expected_days=manifest.season_expected_days,
     )
     log.write(f"ritmo di spesa: {verdetto.detail}")
     return verdetto.ok, verdetto.detail
@@ -434,7 +511,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ops-ledger", default=str(DEFAULT_OPS_PATH))
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH))
-    parser.add_argument("--expected-days", type=int, default=SEASON_EXPECTED_DAYS)
     parser.add_argument(
         "--force-alarm",
         action="store_true",
@@ -453,11 +529,11 @@ def main(argv: list[str] | None = None) -> int:
         ops_path=Path(args.ops_ledger),
         log_dir=Path(args.log_dir),
         manifest_path=Path(args.manifest),
-        expected_days=args.expected_days,
         force_alarm=args.force_alarm,
     )
 
     print(f"\nlog             : {result.log_path}")
+    print(f"stagione        : {'attiva' if result.season_active else 'nessuna'}")
     print(f"exit code       : {result.exit_code} — {result.meaning}")
     if result.detail:
         print(f"dettaglio       : {result.detail}")
