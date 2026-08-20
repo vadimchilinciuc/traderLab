@@ -159,6 +159,22 @@ class MalformedReason(StrEnum):
     TRUNCATED = "truncated"
 
 
+# I due motivi che NON sono verbali malformati (verbale RUN2 §A.5). Il tasso
+# di malformati misura la tenuta del PROTOCOLLO: un rifiuto dei classificatori
+# e un troncamento da `max_tokens` non ne dicono niente. Ciascuno ha la propria
+# contabilita', una sola, in `ledger.telemetry` — `refusals_total` e
+# `truncated_total`. Sommarli renderebbe illeggibili tutte e tre le metriche, e
+# il gate §7(ii) del pre-registration conta i soli malformati veri.
+NON_MALFORMED_REASONS: frozenset[MalformedReason] = frozenset(
+    {MalformedReason.MODEL_REFUSAL, MalformedReason.TRUNCATED}
+)
+
+
+def is_true_malformed(reason: MalformedReason | None) -> bool:
+    """Vero solo per un verbale che il protocollo ha davvero rifiutato."""
+    return reason is not None and reason not in NON_MALFORMED_REASONS
+
+
 @dataclass(frozen=True, slots=True)
 class ParsedVerbale:
     """Esito del parsing. `record` è valorizzato solo se `ok` è True."""

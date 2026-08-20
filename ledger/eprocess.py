@@ -167,6 +167,11 @@ class KillCriterionResult:
     mean_dispersion: float
     ratio: float | None
     detail: str = ""
+    # Coppie scartate perché la dispersione di quel giorno era indefinita
+    # (verbale RUN2 §A.4: intersezione vuota o meno di due repliche). Sono
+    # dichiarate, non nascoste: una finestra costruita su venti coppie di cui
+    # cinque scartate non è la stessa cosa di una costruita su venti piene.
+    pairs_excluded_undefined: int = 0
 
     @property
     def is_kill(self) -> bool:
@@ -175,7 +180,7 @@ class KillCriterionResult:
 
 def evaluate_kill_criterion(
     agent_machine_gaps: Sequence[float],
-    inter_replica_dispersions: Sequence[float],
+    inter_replica_dispersions: Sequence[float | None],
     config: KillCriterionConfig | None = None,
 ) -> KillCriterionResult:
     """KILL-CRITERION PRE-REGISTRATO.
@@ -186,21 +191,35 @@ def evaluate_kill_criterion(
     macchina stanno misurando rumore di campionamento, non abilità.
 
     Il criterio è codice, non una nota. Non è negoziabile a posteriori.
+
+    Una dispersione `None` (giorno con intersezione vuota o meno di due
+    repliche, verbale RUN2 §A.4) **non entra nella finestra**: la coppia non
+    esiste. Non viene però nascosta — il conteggio finisce in
+    `pairs_excluded_undefined` e nel `detail`. Leggerla come `0.0`
+    abbasserebbe la dispersione media e renderebbe più facile il verdetto di
+    "no skill" proprio nei giorni in cui non si è misurato niente.
     """
     cfg = config or KillCriterionConfig()
-    n = min(len(agent_machine_gaps), len(inter_replica_dispersions))
+    paired = list(zip(agent_machine_gaps, inter_replica_dispersions, strict=False))
+    esclusi = sum(1 for _, d in paired if d is None)
+    definite: list[tuple[float, float]] = [(g, d) for g, d in paired if d is not None]
+    n = len(definite)
     if n < cfg.window:
+        dettaglio = f"servono {cfg.window} osservazioni appaiate, ce ne sono {n}"
+        if esclusi:
+            dettaglio += f" ({esclusi} scartate: dispersione indefinita)"
         return KillCriterionResult(
             verdict=KillVerdict.INSUFFICIENT_DATA,
             window_used=n,
             mean_abs_gap=0.0,
             mean_dispersion=0.0,
             ratio=None,
-            detail=f"servono {cfg.window} osservazioni appaiate, ce ne sono {n}",
+            detail=dettaglio,
+            pairs_excluded_undefined=esclusi,
         )
-
-    gaps = agent_machine_gaps[-cfg.window :]
-    dispersions = inter_replica_dispersions[-cfg.window :]
+    finestra = definite[-cfg.window :]
+    gaps = [g for g, _ in finestra]
+    dispersions = [d for _, d in finestra]
     mean_gap = sum(abs(g) for g in gaps) / cfg.window
     mean_disp = sum(abs(d) for d in dispersions) / cfg.window
 
@@ -220,6 +239,7 @@ def evaluate_kill_criterion(
                 f"gap medio {mean_gap:.6f} <= {cfg.dominance_ratio:.2f} x "
                 f"dispersione media {mean_disp:.6f}: no skill misurabile"
             ),
+            pairs_excluded_undefined=esclusi,
         )
 
     return KillCriterionResult(
@@ -232,4 +252,5 @@ def evaluate_kill_criterion(
             f"gap medio {mean_gap:.6f} > {cfg.dominance_ratio:.2f} x "
             f"dispersione media {mean_disp:.6f}"
         ),
+        pairs_excluded_undefined=esclusi,
     )

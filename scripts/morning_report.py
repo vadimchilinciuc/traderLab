@@ -15,7 +15,6 @@ Nessuna chiamata al modello, nessuna scrittura: solo lettura.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from collections import Counter
 from datetime import date
@@ -25,31 +24,38 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH
-from arena.runner import LLM_COMPLETE_TOOL
 from ledger.eprocess import KillCriterionConfig
 from ledger.ops_ledger import OpsEvent, OpsLedger, recorded_days
+from ledger.spend import (
+    FABLE_CACHE_READ_USD_PER_MTOK,
+    FABLE_CACHE_WRITE_USD_PER_MTOK,
+    FABLE_INPUT_USD_PER_MTOK,
+    FABLE_OUTPUT_USD_PER_MTOK,
+    day_token_totals,
+    estimate_cost_usd,
+)
 from ledger.trader_ledger import TraderLedger
 from toolserver.config import ToolServerConfig
 
-# Prezzi di listino Claude Fable 5 (`claude-fable-5`), USD per milione di
-# token — dal listino Anthropic consultato al momento della stesura
-# (2026-08-14). DA AGGIORNARE se il listino cambia.
-FABLE_INPUT_USD_PER_MTOK = 10.00
-FABLE_OUTPUT_USD_PER_MTOK = 50.00
-# Scrittura in cache: 1.25x il prezzo input, TTL 5 minuti — è il default del
-# client (arena/llm_client.py, CACHE_CONTROL_EPHEMERAL non specifica un ttl
-# esplicito). DA AGGIORNARE se il listino o il TTL di default cambiano.
-FABLE_CACHE_WRITE_USD_PER_MTOK = FABLE_INPUT_USD_PER_MTOK * 1.25
-# Lettura dalla cache: 0.1x il prezzo input. DA AGGIORNARE se il listino
-# cambia.
-FABLE_CACHE_READ_USD_PER_MTOK = FABLE_INPUT_USD_PER_MTOK * 0.1
-
-_TOKEN_KEYS = (
-    "input_tokens",
-    "output_tokens",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-)
+# Il listino e la somma dei token vivono in `ledger/spend.py`: li leggono anche
+# le guardie economiche di stagione (D5), e due copie della stessa tariffa
+# divergono il giorno in cui una viene aggiornata e l'altra no. Qui si
+# re-importano per non rompere chi li cita da questo modulo.
+__all__ = [
+    "FABLE_CACHE_READ_USD_PER_MTOK",
+    "FABLE_CACHE_WRITE_USD_PER_MTOK",
+    "FABLE_INPUT_USD_PER_MTOK",
+    "FABLE_OUTPUT_USD_PER_MTOK",
+    "classify_outcome",
+    "day_entries",
+    "day_token_totals",
+    "estimate_cost_usd",
+    "format_asset_lines",
+    "generate_report",
+    "last_touched_day",
+    "latest_event_detail",
+    "run_ids_for_day",
+]
 
 
 # --------------------------------------------------------------------------
@@ -144,46 +150,6 @@ def run_ids_for_day(entries: list[dict[str, Any]]) -> list[str]:
         if run_id and run_id not in seen:
             seen.append(run_id)
     return seen
-
-
-def day_token_totals(run_ids: list[str], toolcalls_dir: Path) -> tuple[int, int, int, int]:
-    """Somma input/output/cache_read/cache_creation dal log delle tool call.
-
-    Un campo assente nella telemetria vale 0 in questa somma: qui interessa il
-    totale della giornata, non distinguere "zero token" da "non registrato"
-    (quella distinzione vive in `arena.llm_client.LLMUsage`).
-    """
-    totals = {key: 0 for key in _TOKEN_KEYS}
-    for run_id in run_ids:
-        path = toolcalls_dir / f"{run_id}.jsonl"
-        if not path.exists():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if record.get("tool") != LLM_COMPLETE_TOOL:
-                continue
-            meta = record.get("meta") or {}
-            for key in _TOKEN_KEYS:
-                totals[key] += meta.get(key) or 0
-    return (
-        totals["input_tokens"],
-        totals["output_tokens"],
-        totals["cache_read_input_tokens"],
-        totals["cache_creation_input_tokens"],
-    )
-
-
-def estimate_cost_usd(
-    input_tokens: int, output_tokens: int, cache_read_tokens: int, cache_creation_tokens: int
-) -> float:
-    return (
-        input_tokens * FABLE_INPUT_USD_PER_MTOK
-        + output_tokens * FABLE_OUTPUT_USD_PER_MTOK
-        + cache_read_tokens * FABLE_CACHE_READ_USD_PER_MTOK
-        + cache_creation_tokens * FABLE_CACHE_WRITE_USD_PER_MTOK
-    ) / 1_000_000.0
 
 
 # --------------------------------------------------------------------------

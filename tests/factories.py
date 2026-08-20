@@ -77,7 +77,10 @@ def make_asset(
             ),
         ),
         liquidity=LiquidityEstimate(
-            spread_bps=2.0, depth_usd_1pct=500_000.0, estimator="static_v0"
+            spread_bps=2.0,
+            depth_usd_1pct=500_000.0,
+            depth_source="costante_dichiarata",
+            estimator="static_v0",
         ),
         costs=CostModel(maker_bps=1.5, taker_bps=4.5),
     )

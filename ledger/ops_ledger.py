@@ -227,6 +227,31 @@ def last_recorded_day(ledger: TraderLedger) -> date | None:
     return days[-1] if days else None
 
 
+def ops_days(ops_ledger: OpsLedger) -> list[date]:
+    """Giorni per cui il registro operativo ha almeno un evento, ordinati."""
+    return sorted({date.fromisoformat(e["key"]["day"]) for e in ops_ledger.read_all()})
+
+
+def last_known_day(trader_ledger: TraderLedger, ops_ledger: OpsLedger) -> date | None:
+    """L'ultimo giorno di cui il Lab ha una traccia, di qualunque tipo.
+
+    CODA voce 23. `last_recorded_day` guarda solo il ledger dei verbali, e con
+    quel ledger **vuoto** non esiste un "prima" da cui misurare un buco: una
+    stagione che fallisce le prime giornate non ne registra nessuna come
+    saltata, per sempre. Il registro operativo però quelle giornate le ha viste
+    — `run_failed` si scrive anche a ledger dei verbali vuoto, perché il rito è
+    partito davvero — e quel `run_failed` è un ancoraggio valido quanto un
+    verbale.
+
+    Quindi: il primo fatto registrato, **verbale o fallimento**, ancora la
+    misura dei buchi successivi. Senza questo, la riga `run_failed` di una
+    stagione appena iniziata resterebbe un fatto isolato che non fa da
+    riferimento a niente.
+    """
+    candidati = recorded_days(trader_ledger) + ops_days(ops_ledger)
+    return max(candidati) if candidati else None
+
+
 def missing_days(last_day: date, today: date) -> list[date]:
     """Giorni tra l'ultimo registrato e oggi, esclusi entrambi.
 
@@ -252,19 +277,27 @@ def mark_missing_days(
 
     Ritorna i giorni marcati **in questa passata**: quelli già marcati non
     vengono riscritti e non compaiono nel risultato.
+
+    Il punto di partenza è `last_known_day`, non `last_recorded_day` (CODA
+    voce 23): con il ledger dei verbali vuoto vale come ancoraggio l'ultimo
+    evento del registro operativo — tipicamente il `run_failed` di una
+    giornata in cui il rito è partito e non ha prodotto verbali. Altrimenti una
+    stagione che fallisce le prime giornate non registrerebbe mai i buchi che
+    seguono.
     """
-    last = last_recorded_day(trader_ledger)
+    last = last_known_day(trader_ledger, ops_ledger)
     if last is None:
-        # Ledger vuoto: non esiste un "prima" da cui misurare un buco. Il primo
-        # giorno di una stagione non ha giorni saltati alle spalle.
+        # Nessuna traccia da nessuna parte: non esiste un "prima" da cui
+        # misurare un buco. Il primo giorno di una stagione non ha giorni
+        # saltati alle spalle.
         return []
     marcati: list[date] = []
     for day in missing_days(last, today):
         written = ops_ledger.record_skipped_day(
             day,
             detail=(
-                f"nessuna decisione registrata; ultimo giorno con verbali: "
-                f"{last.isoformat()}"
+                f"nessuna decisione registrata; ultimo giorno con una traccia "
+                f"(verbale o evento operativo): {last.isoformat()}"
             ),
             detected_at_utc=detected_at_utc,
         )

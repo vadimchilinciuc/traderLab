@@ -58,11 +58,28 @@ class FundingPoint(FrozenModel):
         return require_utc(v, "ts_utc")
 
 
+#: Provenienza di `depth_usd_1pct`, dichiarata dentro lo snapshot stesso.
+#: Foglio 19/08 punto 15: la profondità non è stimata, è una **costante
+#: dichiarata** — il builder ci mette 250.000 USD sempre, qualunque cosa dica
+#: il book. Finché l'etichetta stava solo nel nome del campo (`..._estimated`)
+#: e nel commento del builder, chi leggeva un record vecchio non aveva modo di
+#: sapere quale delle due cose stesse guardando.
+DepthSource = Literal["costante_dichiarata", "stimata", "misurata"]
+
+
 class LiquidityEstimate(FrozenModel):
-    """Spread e profondità *stimati* — dichiarati stimati, non misurati."""
+    """Spread e profondità dell'asset, ciascuno con la propria provenienza.
+
+    `spread_bps` è davvero stimato, dal book: `estimator` dice come.
+    `depth_usd_1pct` no — oggi è una costante, e `depth_source` lo dice a
+    chiunque legga il record senza dover risalire al codice del builder che
+    l'ha scritto. Una costante spacciata per stima è il tipo di errore che si
+    scopre mesi dopo, quando qualcuno ci calcola sopra un impatto di mercato.
+    """
 
     spread_bps: Bps
     depth_usd_1pct: float = Field(ge=0.0)
+    depth_source: DepthSource
     estimator: str = Field(min_length=1)
 
 

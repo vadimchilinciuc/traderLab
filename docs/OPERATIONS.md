@@ -74,6 +74,37 @@ finisce nel log. Non esiste un modo supportato di passarla da riga di comando.
 Parametri: `-Ledger`, `-OpsLedger`, `-LogDir` per spostare i percorsi (utile
 per una prova su cartelle usa-e-getta senza toccare il track record).
 
+### Le quattro guardie della modalità `-Live`
+
+Dal 20/08/2026 `scripts/run_day.py` in modalità `--live` **non parte** se una
+di queste quattro non passa. Ognuna è un rifiuto pulito con exit code 2, mai
+un ripiego silenzioso:
+
+1. **Il manifest si carica, non si ricostruisce** (verbale RUN2 §A.2,
+   precondizione TL-007). Il percorso è `--manifest`, di default
+   `manifests/trader_v0_freeze_manifest.json`. Prima, il runner ricomponeva il
+   manifest a runtime incorporando lo sha di git corrente: le tre giornate di
+   Stagione 0 produssero tre `freeze_id` diversi, nessuno uguale a quello del
+   manifest firmato e timbrato.
+2. **Il `freeze_id` si ricalcola** dal contenuto e deve coincidere con quello
+   scritto nel file. Se diverge, il manifest è stato toccato dopo la firma.
+3. **`pin_commit` deve esserci.** È il commit del rito del pin, fisso per
+   tutta la stagione, e ha preso il posto di `context_git_sha` dentro il
+   calcolo del `freeze_id`. Assente o segnaposto = il pin non è avvenuto e non
+   c'è una stagione da far girare.
+4. **La spesa cumulata di stagione deve stare sotto `1,5 ×` il preventivo**
+   (D5). Il preventivo è `season_budget_usd`, valorizzato al rito del pin;
+   **assente è a sua volta un rifiuto**, perché trattarlo come "nessun limite"
+   trasformerebbe la dimenticanza di un campo in una stagione senza tetto.
+
+> **Prima del rito del pin le guardie 3 e 4 rifiutano sempre**, ed è corretto
+> così. Il manifest di Stagione 0 non ha né `pin_commit` né
+> `season_budget_usd`, e sotto il contratto nuovo il suo `freeze_id`
+> ricalcolato non coincide più con quello scritto nel file: il file è
+> congelato e non si tocca, quindi la guardia 2 lo respinge per prima. La
+> modalità mock non è toccata da nessuna delle quattro — non c'è un modello
+> pinnato da rispettare quando il modello è il MockLLM.
+
 ---
 
 ## 3. Exit code
@@ -129,11 +160,11 @@ di un commit.
 3. **Triggers** → New…
    - *Daily*, ricorrenza 1 giorno.
    - Ora di avvio: **l'ora locale che corrisponde a 00:00 UTC**
-     (`DEFAULT_SNAPSHOT_HOUR_UTC`). Il Task Scheduler ragiona in ora locale e
-     **non** ha un'opzione UTC: con l'ora legale l'offset cambia due volte
-     l'anno, quindi il trigger va ricontrollato a ogni cambio. Se l'ora locale
-     non corrisponde più, il rito si ferma da solo con exit code 2 invece di
-     costruire uno snapshot sbagliato.
+     (`DEFAULT_SNAPSHOT_HOUR_UTC`). L'interfaccia grafica ragiona in ora
+     locale, quindi da qui l'ancoraggio a UTC **non si ottiene**: si ottiene
+     dalla riga di comando, vedi «Ancorare il trigger a UTC» sotto. Se l'ora
+     locale non corrisponde più, il rito si ferma da solo con exit code 2
+     invece di costruire uno snapshot sbagliato.
    - *Synchronize across time zones*: spuntato, se disponibile.
 4. **Actions** → New… → *Start a program*
    - Program/script: `powershell.exe`
@@ -171,6 +202,49 @@ $impostazioni = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -
 Register-ScheduledTask -TaskName "traderLab — rito quotidiano" `
     -Action $azione -Trigger $trigger -Settings $impostazioni
 ```
+
+### Ancorare il trigger a UTC
+
+**Eseguito il 20/08/2026** sul task `traderLab — rito quotidiano` (verbale
+RUN2 §A.6 e §A.12). Il trigger era `2026-08-15T02:00:00+02:00`: le 02:00
+locali valgono le 00:00 UTC **solo finché vige CEST**, e il 25/10/2026 il
+cambio d'ora avrebbe spostato l'istante dello snapshot di un'ora a metà
+stagione — cioè cambiato una variabile senza dichiararlo.
+
+Il rimedio è scrivere la `StartBoundary` con il **suffisso `Z`**. Il Task
+Scheduler la conserva così: il trigger segue UTC e il cambio d'ora non lo
+tocca. Comando realmente eseguito, da PowerShell:
+
+```powershell
+$t = Get-ScheduledTask | Where-Object { $_.TaskName -like "*rito quotidiano*" }
+$nome = $t.TaskName
+$xml = Export-ScheduledTask -TaskName $nome
+$nuovo = $xml -replace '<StartBoundary>2026-08-15T02:00:00\+02:00</StartBoundary>', `
+                       '<StartBoundary>2026-08-15T00:00:00Z</StartBoundary>'
+Register-ScheduledTask -TaskName $nome -Xml $nuovo -Force
+```
+
+> **Attenzione a come si verifica.** `Get-ScheduledTask`,
+> `Export-ScheduledTask` e `schtasks /query` **rendono la boundary in ora
+> locale**: dopo il comando qui sopra continuano a mostrare
+> `2026-08-15T02:00:00+02:00`, e sembra che non sia successo niente. Non è
+> così. La definizione conservata sta in
+> `C:\Windows\System32\Tasks\traderLab — rito quotidiano` e va letta lì:
+>
+> ```powershell
+> Get-Content -LiteralPath "C:\Windows\System32\Tasks\traderLab — rito quotidiano" `
+>     -Encoding Unicode | Select-String "StartBoundary"
+> ```
+>
+> Verificato il 20/08/2026: il file conserva `2026-08-15T00:00:00Z`, mentre
+> `schtasks /query` mostrava `2026-08-15T02:00:00+02:00`. **Il file ha
+> ragione.** Chi verifica solo con `schtasks` conclude, sbagliando, che
+> l'ancoraggio non è stato applicato.
+
+Nota su `Set-ScheduledTask -Trigger`: assegnare `StartBoundary` sull'oggetto
+restituito da `Get-ScheduledTask` e ripassarlo a `Set-ScheduledTask` **non
+funziona** — provato il 20/08, la boundary resta quella locale. La via che
+funziona è quella dell'XML qui sopra.
 
 ### Ambiente del task
 
@@ -296,11 +370,15 @@ oggi, il rito esce con 5 e non tocca nulla. Non è un errore da aggirare.
 ## 8. Controllo mattutino
 
 Un secondo task, indipendente dal rito quotidiano: gira ogni mattina alle
-08:00 ora locale e risponde a due domande — *il rito di stanotte ha prodotto
-verbali?* e *il rito di STANOTTE (quella che deve ancora partire) troverà le
-sue precondizioni soddisfatte?* — più, il lunedì, un tentativo silenzioso di
-far avanzare il timbro OTS dei file congelati. Non tocca il ledger, non
-decide nulla: è uno strumento di lettura e di controllo, non un secondo rito.
+**07:00 ora locale** e risponde a tre domande — *il rito di stanotte ha
+prodotto verbali?*, *il rito di STANOTTE (quella che deve ancora partire)
+troverà le sue precondizioni soddisfatte?* e *la stagione sta spendendo più in
+fretta del preventivo?* — più, il lunedì, un tentativo silenzioso di far
+avanzare il timbro OTS dei file congelati. Non tocca il ledger, non decide
+nulla: è uno strumento di lettura e di controllo, non un secondo rito.
+
+**Registrato il 20/08/2026** (verbale RUN2 §A.6). Fino ad allora lo script
+esisteva sul disco e non lo lanciava nessuno.
 
 ### Cosa fa
 
@@ -336,6 +414,60 @@ Python, per lo stesso motivo di `run_daily.ps1`). Tre passi indipendenti:
    calendar non rispondono o l'attestazione resta pending, l'esito finisce
    nel log e il controllo prosegue comunque. Fuori dal lunedì questo passo
    non parte.
+4. **Verifica il ritmo di spesa della stagione** (D5). Legge la spesa
+   cumulata — le giornate e i `run_id` dal ledger dei verbali, i token dal log
+   delle tool call — e la confronta con `1,25 ×` il pro-rata del preventivo
+   (`season_budget_usd` del Freeze manifest × giornate eseguite ÷ giornate
+   attese). Oltre soglia è un'anomalia. Non tocca l'exit code: la soglia che
+   **ferma** le cose è quella dura, `1,5 ×` il preventivo, e vive nel runner
+   (§2). Finché `season_budget_usd` non è valorizzato — cioè fino al rito del
+   pin — il passo si **salta** con il motivo scritto nel log, e non produce
+   allarmi: un allarme che scatta ogni giorno per una condizione normale
+   insegna a ignorare il canale.
+
+### Il canale d'allarme: `ALLARME_<data>.txt`
+
+Verbale RUN2 §A.6, decisione D3. Su **exit ≠ 0** o su **anomalia rilevata** il
+controllo scrive `ALLARME_<data>.txt` alla radice del repo, **con dentro
+l'elenco numerato dei motivi**. Il file è gitignorato (`.gitignore`,
+`ALLARME_*.txt`): è un segnale per l'owner che apre il laptop, non un
+artefatto del track record.
+
+Esiste perché l'avviso a schermo non basta: `msg.exe` e il popup PowerShell
+richiedono una sessione interattiva, e se non c'è l'avviso non compare e nel
+log resta una riga che nessuno apre. Il file invece resta lì finché qualcuno
+non lo guarda. **Cancellarlo dopo averlo letto è la chiusura prevista**:
+nessun automatismo lo rimuove, e nessun automatismo lo sovrascrive se non una
+seconda passata dello stesso giorno.
+
+I motivi che lo fanno comparire, nell'ordine in cui vengono elencati:
+
+| Motivo | Origine |
+| ------ | ------- |
+| `prova forzata …` | `--force-alarm`, vedi sotto |
+| `exit N — …` | la giornata di stanotte manca dal ledger (passo 1) |
+| `preflight NO per stanotte: …` | il preflight dice NO (passo 2) |
+| `ritmo di spesa oltre soglia (D5): …` | la cumulata sfonda il pro-rata (passo 4) |
+
+Un caso lo scrive il wrapper PowerShell e non lo script Python: quando `uv`
+non è nel PATH del task, il controllo non parte affatto (exit 2) e senza
+quella riga in `morning_check.ps1` l'unico caso in cui il controllo non può
+avvisare sarebbe anche l'unico in cui non lascia traccia.
+
+**Provare il canale senza rompere niente.** Un allarme che non si è mai visto
+scattare non si distingue da un allarme che non scatta:
+
+```powershell
+# in modo-allarme forzato: il file compare, con il motivo dentro
+uv run python scripts/morning_check.py --force-alarm
+# in modo normale, con la giornata di stanotte a posto: non compare
+uv run python scripts/morning_check.py
+```
+
+Verificato il 20/08/2026 su un ledger sintetico contenente la giornata
+corrente: in modo forzato `ALLARME_2026-08-20.txt` è comparso con il motivo
+`prova forzata del canale d'allarme`; in modo normale non è comparso, ed exit
+è stato 0. Il file di prova è stato rimosso a fine verifica.
 
 ### `scripts/preflight.py`
 
@@ -389,7 +521,10 @@ cercare, in ordine:
 | ---- | ----------- |
 | `STOP: …` | La giornata di stanotte manca; segue il testo dell'avviso mostrato. |
 | `--- rapporto del mattino ---` | La giornata c'è: il rapporto sintetico segue, indentato. |
+| `ritmo di spesa: …` | Passo 4 (D5): la cumulata contro il pro-rata, oppure il motivo per cui il passo è stato saltato. |
 | `upgrade OTS …` | Solo il lunedì: esito del tentativo di upgrade per ciascuno dei due file. |
+| `ALLARME scritto in …` | Il canale d'allarme è scattato; le righe `motivo:` che seguono sono le stesse che finiscono nel file. |
+| `nessun allarme: …` | Nessun motivo rilevato: `ALLARME_<data>.txt` **non** viene creato. |
 
 Exit code: `0` giornata presente, rapporto scritto; `1` giornata assente,
 avviso mostrato; `2` precondizione della macchina non soddisfatta (`uv`
@@ -398,33 +533,68 @@ quotidiano, non del passo 1.
 
 ### Registrare il task in Windows Task Scheduler
 
-**Lo fa l'owner, a mano**, come per il rito quotidiano (§4): nessuno script
-del repo registra un task. Riga di comando equivalente, da eseguire una
-volta sola con il percorso reale del repo:
+**Eseguito il 20/08/2026.** Il task si chiama `traderLab — controllo
+mattutino` ed è registrato con il comando qui sotto, che è quello realmente
+lanciato (non una ricetta descritta e mai eseguita):
 
 ```powershell
-$repo = "C:\percorso\traderLab"
+$repo = "C:\Users\vadim.chilinciuc\git\traderLab"
+$nome = "traderLab — controllo mattutino"
 $azione = New-ScheduledTaskAction -Execute "powershell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$repo\scripts\morning_check.ps1`"" `
     -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Daily -At "08:00"
+$trigger = New-ScheduledTaskTrigger -Daily -At "07:00"
 $impostazioni = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
-Register-ScheduledTask -TaskName "traderLab — controllo mattutino" `
-    -Action $azione -Trigger $trigger -Settings $impostazioni
+$principale = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -LogonType Interactive
+Register-ScheduledTask -TaskName $nome -Action $azione -Trigger $trigger `
+    -Settings $impostazioni -Principal $principale -Force
 ```
+
+Stato verificato subito dopo, con `schtasks /query /tn "traderLab — controllo
+mattutino" /v /fo LIST`:
+
+| Voce | Valore |
+| ---- | ------ |
+| Stato | **Pronta / Abilitata** |
+| Tipo di pianificazione | Ogni giorno, ogni 1 giorni |
+| Ora di avvio | **07:00:00** (ora locale) |
+| Data di avvio | 20/08/2026 |
+| Avvio in | `C:\Users\vadim.chilinciuc\git\traderLab` |
+| Logon | `Interactive` |
 
 Note che valgono quanto per il rito quotidiano (§4):
 
 - *Run only when user is logged on* — l'avviso visibile (`msg.exe` o il
   popup PowerShell) richiede una sessione interattiva per poter comparire; e
-  `uv` deve stare nel PATH dell'account con cui gira il task.
-- L'ora del trigger è **ora locale**, non UTC: a differenza del rito
-  quotidiano, il controllo delle 08:00 non ha un vincolo strutturale
-  sull'ora — è un promemoria per l'owner, non una decisione point-in-time —
-  quindi non c'è una guardia che lo ferma se l'orario slitta con il cambio
-  ora legale. Ricontrollarlo comunque due volte l'anno tiene "le 08:00" un
-  orario sensato per aprire il laptop e leggere il log.
+  `uv` deve stare nel PATH dell'account con cui gira il task. Il file
+  `ALLARME_<data>.txt` invece compare comunque: è il canale che non dipende
+  dalla sessione.
+- L'ora del trigger è **ora locale**, non UTC, e qui è voluto: a differenza
+  del rito quotidiano, il controllo delle 07:00 non ha un vincolo strutturale
+  sull'ora — è un promemoria per l'owner, non una decisione point-in-time.
+  Non c'è quindi una guardia che lo ferma se l'orario slitta con il cambio
+  d'ora, e non serve ancorarlo a UTC: "le 07:00" deve restare un orario
+  sensato per aprire il laptop, non un istante di mercato.
+
+> **Stato operativo al 20/08/2026, da leggere prima di lasciarlo correre.**
+> Il task del controllo mattutino è **abilitato**; quello del rito quotidiano
+> è **disabilitato** dalla chiusura anticipata di Stagione 0 (`DECISION_LOG.md`,
+> TL-006). Finché resta così, ogni mattina alle 07:00 il controllo trova che
+> «il rito di stanotte NON ha prodotto verbali» — che è **vero** — ed esce 1,
+> scrivendo un `ALLARME_<data>.txt` al giorno. È rumore prevedibile, non un
+> guasto. Due chiusure possibili, entrambe dell'owner:
+>
+> ```powershell
+> # (a) sospendere il controllo fino al rito del pin
+> Disable-ScheduledTask -TaskName "traderLab — controllo mattutino"
+> # (b) riabilitare il rito notturno: i due task tornano coerenti
+> Enable-ScheduledTask  -TaskName "traderLab — rito quotidiano"
+> ```
+>
+> I due task si accendono insieme: un controllo che verifica un rito spento
+> non misura niente, e un rito acceso senza controllo non ha chi lo guardi.
 
 ### Cosa non fa
 
@@ -435,3 +605,9 @@ Note che valgono quanto per il rito quotidiano (§4):
 - **Non effettua il pin OTS.** L'upgrade del lunedì fa avanzare un timbro
   già esistente da pending a confermato — non crea un nuovo timbro e non
   tocca il pin del modello.
+- **Non ferma il rito per motivi di spesa.** Il passo 4 allerta e basta. La
+  soglia che ferma è quella dura, `1,5 ×` il preventivo, e sta nel runner
+  (§2): le due soglie hanno funzioni diverse e non vanno confuse.
+- **Non cancella l'allarme che ha scritto.** `ALLARME_<data>.txt` resta
+  finché l'owner non lo rimuove. Un allarme che sparisce da solo è un allarme
+  che si può non vedere mai.

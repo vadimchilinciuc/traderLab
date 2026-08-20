@@ -25,18 +25,26 @@ from arena.config import ArenaConfig, ContextFiles, all_tool_schemas, load_conte
 from arena.llm_client import LLMClient, LLMError, LLMResponse
 from arena.risk_officer import PortfolioState, RiskOfficer
 from arena.shadow_fill import compute_shadow_fill
-from arena.verbale import SUBMIT_TOOL_NAME, MalformedReason, ParsedVerbale, parse_verbale
+from arena.verbale import (
+    SUBMIT_TOOL_NAME,
+    MalformedReason,
+    ParsedVerbale,
+    is_true_malformed,
+    parse_verbale,
+)
 from ledger.telemetry import BehavioralTelemetry, DailyDispersion, daily_dispersion
 from ledger.trader_ledger import LedgerKey, TraderLedger
 from toolserver.registry import ToolRegistry
 from toolserver.store import SnapshotStore
-from toolserver.toollog import ToolCallLog
+from toolserver.toollog import LLM_COMPLETE_TOOL, ToolCallLog
 
-# Nome sintetico sotto cui la chiamata al modello (non un tool del Tool
-# Server) finisce nello stesso log JSONL delle tool call: è un dato sulla
-# richiesta al pari degli altri (CLAUDE.md §9), e la telemetria dei tentativi
-# vive lì, non in un file di testo a parte.
-LLM_COMPLETE_TOOL = "llm_complete"
+__all__ = [
+    "LLM_COMPLETE_TOOL",
+    "AssetOutcome",
+    "DailyRunResult",
+    "DailyRunner",
+    "RunnerError",
+]
 
 USER_TEMPLATE = (
     "Istante di riferimento dei dati: {asof}.\n"
@@ -79,7 +87,33 @@ class DailyRunResult:
 
     @property
     def malformed_count(self) -> int:
-        return sum(1 for o in self.outcomes if o.malformed_reason is not None)
+        """Verbali malformati **veri** (verbale RUN2 §A.5).
+
+        Rifiuti del modello e risposte troncate da `max_tokens` sono esclusi:
+        hanno ciascuno la propria contabilità, una sola, e finivano qui dentro
+        producendo un doppio conteggio. La giornata del 18/08 di Stagione 0
+        stampò «malformati: 2» avendo però un solo verbale malformato vero
+        (`no_tool_use` su r1 BTC) e un rifiuto del modello (r3 ETH).
+        """
+        return sum(1 for o in self.outcomes if is_true_malformed(o.malformed_reason))
+
+    @property
+    def refusal_count(self) -> int:
+        """Rifiuti del modello. Unica sede del conteggio insieme a
+        `BehavioralTelemetry.refusals_total`, che misura la stessa cosa per
+        replica invece che per giornata."""
+        return sum(
+            1
+            for o in self.outcomes
+            if o.malformed_reason is MalformedReason.MODEL_REFUSAL
+        )
+
+    @property
+    def truncated_count(self) -> int:
+        """Risposte tagliate da `max_tokens`. Contate a parte da entrambe."""
+        return sum(
+            1 for o in self.outcomes if o.malformed_reason is MalformedReason.TRUNCATED
+        )
 
     def by_replica(self) -> dict[str, dict[str, DecisionRecord]]:
         out: dict[str, dict[str, DecisionRecord]] = {}
@@ -356,6 +390,17 @@ class DailyRunner:
                         if response.usage
                         else None
                     ),
+                    # Verbale RUN2 §A.7: il thinking si logga separato
+                    # dall'output, e la sua ASSENZA si logga esplicitamente.
+                    # Con `usage` assente entrambi i campi restano comunque
+                    # presenti nel record: `None` per il conteggio, `True` per
+                    # l'assenza, mai il silenzio.
+                    "thinking_tokens": (
+                        response.usage.thinking_tokens if response.usage else None
+                    ),
+                    "thinking_absent": (
+                        response.usage.thinking_absent if response.usage else True
+                    ),
                 },
             )
             # Rifiuto dei classificatori: HTTP 200 con content vuoto o parziale.
@@ -411,10 +456,23 @@ class DailyRunner:
                 _deterministic_tool_id(_name(b), _input(b), i)
                 for i, b in enumerate(tool_uses)
             ]
+            # B.3 del verbale RUN2: il turno rimandato indietro porta i SOLI
+            # blocchi tool_use. Il testo libero che il modello ha scritto prima
+            # della chiamata cambia a ogni generazione: lasciarlo qui spezza il
+            # prefisso di cache a ogni turno e, con esso, la comparabilita' fra
+            # chiamate che per costruzione dovrebbero essere identiche (D1).
+            # Rimuoverlo e' il rimedio misurato 8,8x sul costo per chiamata
+            # (da ~$1,7809 a ~$0,2154) e la rimozione della fonte di divergenza
+            # dei prefissi. Il razionale in testo libero resta obbligatorio nel
+            # turno FINALE, quello che porta il verbale: quel turno non passa
+            # di qui, va al parser (`arena/verbale.py`), e CLAUDE.md §8 e'
+            # intatto.
             messages.append(
                 {
                     "role": "assistant",
-                    "content": _to_params(response.content, tool_ids=det_ids),
+                    "content": _to_params(
+                        response.content, tool_ids=det_ids, only_tool_use=True
+                    ),
                 }
             )
             tool_results = []
@@ -537,13 +595,21 @@ def _deterministic_tool_id(name: str | None, args: dict[str, Any] | None, index:
 
 
 def _to_params(
-    content: list[Any], tool_ids: list[str] | None = None
+    content: list[Any],
+    tool_ids: list[str] | None = None,
+    *,
+    only_tool_use: bool = False,
 ) -> list[dict[str, Any]]:
     """Converte i blocchi di risposta in blocchi di richiesta per il turno dopo.
 
     Se `tool_ids` e' passato, sostituisce l'id di ogni blocco `tool_use` (in
     ordine di comparsa) con quello indicato invece di quello dell'API — vedi
     `_deterministic_tool_id`.
+
+    Con `only_tool_use=True` i blocchi di testo vengono **scartati**: e' il
+    rimedio B.3 del verbale RUN2, che rende il prefisso della richiesta
+    riproducibile fra chiamate. Il default resta `False` perche' la funzione
+    e' anche la conversione generica dei blocchi.
     """
     params: list[dict[str, Any]] = []
     tool_idx = 0
@@ -551,6 +617,8 @@ def _to_params(
         block_type = (
             block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
         )
+        if block_type == "text" and only_tool_use:
+            continue
         if block_type == "text":
             text = (
                 block.get("text") if isinstance(block, dict) else getattr(block, "text", "")

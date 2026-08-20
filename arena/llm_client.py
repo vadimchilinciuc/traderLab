@@ -22,7 +22,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from contracts.freeze import FreezeManifest, SamplingPolicy, ThinkingPolicy
+from contracts.freeze import (
+    FreezeManifest,
+    SamplingPolicy,
+    ThinkingDeclaration,
+    ThinkingPolicy,
+)
 
 
 class LLMError(Exception):
@@ -58,6 +63,16 @@ class BudgetExceeded(LLMError):
     """Superato il tetto di chiamate dichiarato per la giornata."""
 
 
+class ThinkingDeclarationViolated(LLMError):
+    """Il payload non è coerente con `thinking_declared` del Freeze manifest.
+
+    Verbale RUN2 §A.7. Non è un errore di rete e non è un problema del
+    modello: è il client che sta per inviare una chiamata diversa da quella
+    che il pin dichiara. Si ferma prima di partire — una chiamata fatta in una
+    forma non dichiarata produce un track record che il manifest non descrive.
+    """
+
+
 class MissingApiKey(LLMError):
     pass
 
@@ -86,12 +101,23 @@ class LLMUsage:
     (RITO CACHING): il primo conta i token scritti in cache a una chiamata
     che non trova un prefisso già cacheato, il secondo quelli letti dalla
     cache invece che rielaborati.
+
+    `thinking_tokens` e `thinking_absent` sono il verbale RUN2 §A.7: sul
+    modello pinnato il ragionamento consuma lo stesso `max_tokens` della
+    risposta, e finché il costo del thinking non ha un campo suo è
+    indistinguibile dal costo del verbale. I due campi sono **sempre
+    presenti**: quando il payload non contiene blocchi di thinking,
+    `thinking_absent` vale True e l'assenza è un dato registrato, non un
+    silenzio. `thinking_tokens` resta `None` se l'API non espone un contatore
+    separato — `None` significa "non registrato", mai "zero token".
     """
 
     input_tokens: int | None
     output_tokens: int | None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    thinking_tokens: int | None = None
+    thinking_absent: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +206,43 @@ class CallBudget:
 # --------------------------------------------------------------------------
 
 CACHE_CONTROL_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+
+
+# --------------------------------------------------------------------------
+# Coerenza con la dichiarazione di thinking (verbale RUN2 §A.7)
+# --------------------------------------------------------------------------
+
+
+def assert_thinking_coherent(
+    payload: dict[str, Any], declared: ThinkingDeclaration
+) -> None:
+    """Il payload che sta per partire è quello che il pin dichiara?
+
+    Due direzioni, entrambe un rifiuto:
+
+    - la dichiarazione dice che il parametro **non si invia** e il payload
+      contiene `thinking` — è la forma che su `claude-fable-5` produce 400, e
+      anche se non lo producesse sarebbe una chiamata non dichiarata;
+    - la dichiarazione dice che il parametro **si invia** e il payload non ce
+      l'ha — il manifest descriverebbe una configurazione che non è stata usata.
+
+    Il controllo sta qui e non nel prompt perché è un vincolo che deve valere
+    sempre (`CLAUDE.md` §2), e vive nel client perché è l'unico punto che vede
+    il payload esatto.
+    """
+    presente = "thinking" in payload
+    if declared is ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED and presente:
+        raise ThinkingDeclarationViolated(
+            "il Freeze manifest dichiara thinking_declared="
+            f"{declared.value} (parametro omesso), ma il payload contiene "
+            f"'thinking': {payload['thinking']!r}. Chiamata non inviata."
+        )
+    if declared is ThinkingDeclaration.EXPLICIT_PARAM_SENT and not presente:
+        raise ThinkingDeclarationViolated(
+            "il Freeze manifest dichiara thinking_declared="
+            f"{declared.value} (parametro inviato esplicitamente), ma il "
+            f"payload non contiene 'thinking'. Chiamata non inviata."
+        )
 
 
 def _cached_system(system: str) -> list[dict[str, Any]]:
@@ -326,6 +389,7 @@ class AnthropicTraderClient:
             "messages": _cached_messages(messages),
             "tools": _cached_tools(tools),
         }
+        assert_thinking_coherent(payload, self._manifest.thinking_declared)
         started = time.monotonic()
         attempt_errors: list[str | None] = []
         for attempt in range(self._max_retries + 1):
@@ -388,6 +452,24 @@ def _normalize_response(
     )
 
 
+#: Tipi di blocco che l'API usa per il ragionamento. Il secondo compare quando
+#: il contenuto del thinking viene oscurato ma il blocco resta presente: per il
+#: conteggio dell'ASSENZA vale come thinking presente, perché il ragionamento
+#: c'è stato ed è stato pagato.
+THINKING_BLOCK_TYPES: frozenset[str] = frozenset({"thinking", "redacted_thinking"})
+
+
+def _has_thinking_blocks(response: Any) -> bool:
+    """Il payload di risposta contiene blocchi di thinking?
+
+    Verbale RUN2 §A.7: la risposta a questa domanda si logga sempre, anche
+    (soprattutto) quando è "no". Un'assenza non registrata è indistinguibile
+    da una telemetria che non è stata scritta.
+    """
+    content = getattr(response, "content", None) or []
+    return any(_block_type(block) in THINKING_BLOCK_TYPES for block in content)
+
+
 def _extract_usage(response: Any) -> LLMUsage | None:
     """Legge `usage` dalla risposta finale, se presente.
 
@@ -395,16 +477,40 @@ def _extract_usage(response: Any) -> LLMUsage | None:
     entrambi i casi l'SDK espone `.usage` già consolidato sull'oggetto
     `Message`. Nessun campo -> `LLMUsage` assente, mai un usage a zero
     inventato.
+
+    `thinking_tokens` si legge dall'`usage` se l'API espone un contatore
+    dedicato; oggi sul modello pinnato non lo espone e il campo resta `None`.
+    `thinking_absent` invece si determina **sempre**, guardando i blocchi della
+    risposta: è il dato che rende l'assenza esplicita (verbale RUN2 §A.7).
     """
     usage = getattr(response, "usage", None)
     if usage is None:
         return None
+    thinking_tokens = _first_present(
+        usage, ("thinking_tokens", "reasoning_tokens", "reasoning_output_tokens")
+    )
     return LLMUsage(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
         cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", None),
         cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", None),
+        thinking_tokens=thinking_tokens,
+        thinking_absent=not _has_thinking_blocks(response),
     )
+
+
+def _first_present(obj: Any, names: tuple[str, ...]) -> int | None:
+    """Il primo attributo intero fra quelli indicati, altrimenti `None`.
+
+    L'elenco esiste perché il nome del contatore dei token di ragionamento non
+    è stabile fra le versioni dell'SDK: qui si leggono i nomi noti e si accetta
+    `None` — mai uno zero costruito a tavolino.
+    """
+    for name in names:
+        value = getattr(obj, name, None)
+        if isinstance(value, int):
+            return value
+    return None
 
 
 # Classificazione per `type` del corpo dell'errore API. Serve perché un errore

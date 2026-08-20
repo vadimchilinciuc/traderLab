@@ -11,6 +11,11 @@
 #   1  la giornata di stanotte NON e' nel ledger, avviso mostrato
 #   2  precondizione non soddisfatta — il controllo non e' partito
 #
+# Canale d'allarme (verbale RUN2 §A.6, decisione D3): su exit != 0 o su
+# anomalia rilevata compare ALLARME_<data>.txt alla radice del repo, con il
+# motivo dentro. Lo scrive scripts/morning_check.py; questo wrapper lo scrive
+# solo nel caso in cui il controllo non parte affatto.
+#
 # Registrazione nel Task Scheduler: vedi docs/OPERATIONS.md. Il task NON va
 # registrato da questo script.
 
@@ -46,9 +51,33 @@ Write-CheckLine "avvio del controllo mattutino da $RepoRoot"
 
 # -- precondizioni della macchina ------------------------------------------
 
+# Canale d'allarme: se il controllo non parte nemmeno, il file lo scrive il
+# wrapper. Altrimenti l'unico caso in cui il controllo NON puo' avvisare
+# sarebbe anche l'unico in cui non lascia traccia.
+$AlarmFile = Join-Path $RepoRoot "ALLARME_$Today.txt"
+
+function Write-WrapperAlarm {
+    param([string]$Reason)
+    $body = @(
+        "ALLARME traderLab - $Today",
+        "",
+        "Il controllo del mattino non e' partito:",
+        "",
+        "  1. $Reason",
+        "",
+        "Log della passata : $LogFile",
+        "",
+        "Questo file e' gitignorato: cancellarlo dopo averlo letto e' la",
+        "chiusura prevista. Nessun automatismo lo rimuove."
+    )
+    Set-Content -Path $AlarmFile -Value $body -Encoding utf8
+    Write-CheckLine "ALLARME scritto in $AlarmFile"
+}
+
 $uv = Get-Command uv -ErrorAction SilentlyContinue
 if ($null -eq $uv) {
     Write-CheckLine "STOP: 'uv' non e' nel PATH del contesto in cui gira il task"
+    Write-WrapperAlarm "'uv' non e' nel PATH del contesto in cui gira il task (exit 2)"
     exit 2
 }
 
@@ -68,4 +97,11 @@ $code = $LASTEXITCODE
 
 Write-CheckLine "scripts/morning_check.py ha restituito $code"
 Write-CheckLine "log del controllo: $LogFile"
+# Il file d'allarme per exit != 0 e per le anomalie lo scrive lo script Python,
+# che conosce i motivi. Qui si annota soltanto se e' comparso.
+if (Test-Path $AlarmFile) {
+    Write-CheckLine "ALLARME presente: $AlarmFile"
+} else {
+    Write-CheckLine "nessun ALLARME per oggi"
+}
 exit $code

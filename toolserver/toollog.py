@@ -16,6 +16,14 @@ from typing import Any
 from contracts.hashing import sha256_of
 from toolserver.store import assert_path_allowed
 
+# Nome sintetico sotto cui la chiamata al modello — che non è un tool del Tool
+# Server — finisce in questo stesso log: è un dato sulla richiesta al pari
+# degli altri (CLAUDE.md §9). Vive qui, e non in `arena/runner.py` che lo
+# scrive, perché lo leggono anche i moduli che contano i token
+# (`ledger/spend.py`): tenerlo nell'arena obbligherebbe il ledger a importare
+# l'arena, che importa il ledger.
+LLM_COMPLETE_TOOL = "llm_complete"
+
 
 class ToolCallLog:
     """Append-only su file JSONL. Un file per giornata di esecuzione."""

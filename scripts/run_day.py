@@ -5,6 +5,21 @@ usa il modello pinnato nel Freeze manifest e consuma budget vero.
 
     uv run python scripts/run_day.py --snapshot-id <sha256>
     uv run python scripts/run_day.py --snapshot-id <sha256> --live
+    uv run python scripts/run_day.py --snapshot-id <sha256> --live
+        --manifest manifests/<manifest della stagione>.json
+
+In modalita' `--live` il manifest **si carica**, non si ricostruisce (verbale
+RUN2 §A.2). Prima di qualunque chiamata al modello questo script:
+
+1. legge il `FreezeManifest` committato dal percorso indicato da `--manifest`;
+2. ne **ricalcola** il `freeze_id` e si ferma se diverge da quello scritto nel
+   file;
+3. si ferma se `pin_commit` e' assente o e' un segnaposto — il rito del pin non
+   e' avvenuto e non esiste una stagione da far girare;
+4. legge la **spesa cumulata di stagione** dal ledger e si ferma se supera la
+   soglia dura dichiarata in `ledger/spend.py` (D5).
+
+Ognuno dei quattro e' un rifiuto pulito con exit code 2, mai un ripiego.
 """
 
 from __future__ import annotations
@@ -16,7 +31,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from arena.config import ArenaConfig, build_freeze_manifest, current_git_sha
+from arena.config import (
+    DEFAULT_MANIFEST_PATH,
+    ArenaConfig,
+    ManifestError,
+    current_git_sha,
+    load_pinned_manifest,
+)
 from arena.llm_client import (
     AnthropicTraderClient,
     CallBudget,
@@ -25,6 +46,8 @@ from arena.llm_client import (
     RETRYABLE_PROCESS_EXIT_CODE,
 )
 from arena.runner import DailyRunner
+from ledger.spend import check_hard_stop, season_spend
+from ledger.telemetry import DailyDispersion
 from ledger.trader_ledger import TraderLedger
 from toolserver.config import ToolServerConfig, live_api_allowed
 from toolserver.store import SnapshotStore
@@ -37,6 +60,23 @@ def main() -> int:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--ledger", default="data/ledger/season0.jsonl")
     parser.add_argument("--live", action="store_true", help="usa l'API reale")
+    parser.add_argument(
+        "--manifest",
+        default=str(DEFAULT_MANIFEST_PATH),
+        help=(
+            "percorso del FreezeManifest COMMITTATO della stagione. Usato solo "
+            "con --live: viene caricato, il suo freeze_id ricalcolato, e la "
+            "giornata non parte se diverge (verbale RUN2 §A.2)."
+        ),
+    )
+    parser.add_argument(
+        "--toolcalls-dir",
+        default=None,
+        help=(
+            "cartella dei log delle tool call da cui leggere la spesa cumulata "
+            "di stagione (default: quella della configurazione)."
+        ),
+    )
     args = parser.parse_args()
 
     run_id = args.run_id or datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -52,11 +92,41 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        manifest = build_freeze_manifest(datetime.now(tz=timezone.utc))
+        # Verbale RUN2 §A.2 / TL-007. Il manifest si CARICA dal file
+        # committato e il suo freeze_id si ricalcola: ricostruirlo a runtime,
+        # come faceva questo punto in Stagione 0, incorporava lo sha di git
+        # corrente e produceva un freeze_id diverso a ogni giornata, nessuno
+        # uguale a quello firmato e timbrato.
+        try:
+            manifest = load_pinned_manifest(args.manifest)
+        except ManifestError as exc:
+            print(f"ERRORE: manifest non utilizzabile — {exc}", file=sys.stderr)
+            return 2
+
+        # D5. La spesa cumulata di stagione si legge dal ledger dei verbali (le
+        # giornate e i loro run_id) incrociato col log delle tool call (i
+        # token). Oltre la soglia dura non si gira: una guardia che avvisa e
+        # lascia partire non e' una guardia.
+        toolcalls_dir = (
+            Path(args.toolcalls_dir) if args.toolcalls_dir else paths.toolcall_log_dir
+        )
+        spesa = season_spend(trader_ledger=ledger, toolcalls_dir=toolcalls_dir)
+        verdetto = check_hard_stop(spesa, manifest.season_budget_usd)
+        if not verdetto.ok:
+            print(
+                f"ERRORE: guardia economica di stagione — {verdetto.detail}",
+                file=sys.stderr,
+            )
+            return 2
+
         budget = CallBudget(max_calls=ArenaConfig().max_llm_calls_per_day)
+        print(f"manifest        : {args.manifest}")
         print(f"modello pinnato : {manifest.model_string}")
         print(f"sampling        : {manifest.sampling_policy.value} (D4)")
+        print(f"thinking        : {manifest.thinking_declared.value} (§A.7)")
+        print(f"pin_commit      : {manifest.pin_commit}")
         print(f"freeze_id       : {manifest.freeze_id}")
+        print(f"spesa stagione  : {verdetto.detail}")
 
         def factory(replica_id: str):
             return AnthropicTraderClient(manifest, budget=budget)
@@ -99,12 +169,22 @@ def main() -> int:
     print(f"\nrun_id          : {result.run_id}")
     print(f"asof_utc        : {result.asof_utc.isoformat()}")
     print(f"decisioni       : {len(result.decisions)}")
-    print(f"malformati      : {result.malformed_count}")
-    if result.dispersion:
+    # Verbale RUN2 §A.5: tre conteggi, tre righe. Il rifiuto del modello e la
+    # risposta troncata non sono verbali malformati e non stanno nello stesso
+    # numero: sommarli rendeva illeggibili tutte e tre le grandezze.
+    print(f"malformati veri : {result.malformed_count}")
+    print(f"rifiuti modello : {result.refusal_count}")
+    print(f"troncati        : {result.truncated_count}")
+    if result.dispersion is not None:
         d = result.dispersion
+        # §A.4: `n/d` quando la dispersione non e' definita, mai `0.0000` —
+        # che a valle sarebbe indistinguibile da un accordo perfetto.
         print(
-            f"dispersione     : azioni {d.action_disagreement:.4f}, "
-            f"confidence {d.confidence_dispersion:.4f}"
+            f"dispersione     : azioni "
+            f"{DailyDispersion.format_value(d.action_disagreement)}, "
+            f"confidence "
+            f"{DailyDispersion.format_value(d.confidence_dispersion)}"
+            + ("" if d.is_defined else "   (intersezione vuota o < 2 repliche)")
         )
     print(f"catena ledger   : {'ok' if ledger.verify().ok else 'ROTTA'}")
     print(f"tool call log   : {tool_log.path}")

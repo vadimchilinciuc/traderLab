@@ -273,20 +273,56 @@ class BehavioralTelemetry:
 # --------------------------------------------------------------------------
 
 
+#: Come si scrive una dispersione indefinita in un log o in un rapporto.
+#: Verbale RUN2 §A.4: mai `0,0000`, che a valle è indistinguibile da un
+#: accordo perfetto fra repliche.
+UNDEFINED_LABEL = "n/d"
+
+
 @dataclass(frozen=True, slots=True)
 class DailyDispersion:
-    """Quanto le repliche identiche divergono tra loro nello stesso giorno."""
+    """Quanto le repliche identiche divergono tra loro nello stesso giorno.
+
+    I tre valori sono `None` — **non `0.0`** — quando la dispersione non è
+    definita: meno di due repliche, o intersezione vuota degli asset (verbale
+    RUN2 §A.4). Uno zero prodotto da un'intersezione vuota è indistinguibile,
+    a valle, da tre repliche che concordano perfettamente; e la distinzione fra
+    "non ho misurato" e "ho misurato zero" è esattamente ciò che il
+    kill-criterion ha bisogno di leggere.
+
+    Chi stampa questi valori usa `format_value`, che scrive `n/d`.
+    """
 
     assets_compared: int
     replicas: int
-    action_disagreement: float
-    confidence_dispersion: float
-    size_dispersion: float
+    action_disagreement: float | None
+    confidence_dispersion: float | None
+    size_dispersion: float | None
 
     @property
     def is_degenerate(self) -> bool:
         """Con meno di due repliche la dispersione non è definita."""
         return self.replicas < 2 or self.assets_compared == 0
+
+    @property
+    def is_defined(self) -> bool:
+        return not self.is_degenerate
+
+    @staticmethod
+    def format_value(value: float | None, digits: int = 4) -> str:
+        """Formato unico per i log: un numero, oppure `n/d`. Mai uno zero finto."""
+        return UNDEFINED_LABEL if value is None else f"{value:.{digits}f}"
+
+
+def undefined_dispersion(replicas: int, assets_compared: int = 0) -> DailyDispersion:
+    """Il record di una dispersione che non esiste. Tre `None`, non tre zeri."""
+    return DailyDispersion(
+        assets_compared=assets_compared,
+        replicas=replicas,
+        action_disagreement=None,
+        confidence_dispersion=None,
+        size_dispersion=None,
+    )
 
 
 def daily_dispersion(
@@ -298,10 +334,14 @@ def daily_dispersion(
     Si confrontano solo gli asset presenti in **tutte** le repliche: confrontare
     un asset che una replica non ha deciso significa misurare la copertura, non
     la dispersione.
+
+    Con meno di due repliche, o con intersezione vuota, il risultato porta
+    `None` nei tre valori (verbale RUN2 §A.4): la dispersione non è definita e
+    non va confusa con una dispersione nulla.
     """
     replica_ids = sorted(decisions_by_replica)
     if len(replica_ids) < 2:
-        return DailyDispersion(0, len(replica_ids), 0.0, 0.0, 0.0)
+        return undefined_dispersion(len(replica_ids))
 
     common: set[str] | None = None
     for rid in replica_ids:
@@ -309,7 +349,7 @@ def daily_dispersion(
         common = assets if common is None else (common & assets)
     shared = sorted(common or set())
     if not shared:
-        return DailyDispersion(0, len(replica_ids), 0.0, 0.0, 0.0)
+        return undefined_dispersion(len(replica_ids))
 
     action_scores: list[float] = []
     conf_scores: list[float] = []

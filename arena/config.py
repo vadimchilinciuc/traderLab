@@ -7,17 +7,31 @@ che il Trader **non vede mai**.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from contracts.freeze import FreezeManifest, SamplingPolicy, ThinkingPolicy
+from contracts.freeze import (
+    FreezeManifest,
+    SamplingPolicy,
+    ThinkingDeclaration,
+    ThinkingPolicy,
+)
 from contracts.hashing import sha256_of, sha256_of_text
 from arena.risk_officer import RiskConfig
 from arena.verbale import SUBMIT_DECISION_SCHEMA
 from toolserver.registry import TOOL_SCHEMAS
 
-AGENT_DIR = Path(__file__).resolve().parents[1] / "agents" / "trader_v0"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+AGENT_DIR = REPO_ROOT / "agents" / "trader_v0"
+
+# Percorso di default del manifest COMMITTATO che il runner carica. È
+# parametrico: al rito del pin della stagione nuova si passa il percorso del
+# manifest di quella stagione. Il default punta al manifest esistente perché
+# il runner debba comunque incontrare un file vero e rifiutare per il motivo
+# giusto (`pin_commit` assente), invece di non trovarne nessuno.
+DEFAULT_MANIFEST_PATH = REPO_ROOT / "manifests" / "trader_v0_freeze_manifest.json"
 
 # D1: tre repliche identiche.
 DEFAULT_REPLICA_IDS: tuple[str, ...] = ("r1", "r2", "r3")
@@ -148,6 +162,87 @@ def current_git_sha(default: str = "0000000") -> str:
         return default
 
 
+# --------------------------------------------------------------------------
+# Caricamento del manifest committato (verbale RUN2 §A.2)
+# --------------------------------------------------------------------------
+
+
+class ManifestError(Exception):
+    """Il manifest committato non è utilizzabile per far girare una giornata.
+
+    È sempre un rifiuto, mai un ripiego: il runner che incontra questo errore
+    non gira. La causa più comune non è la corruzione del file ma il suo
+    contrario — un manifest sano che però **non è ancora stato pinnato**.
+    """
+
+
+def load_pinned_manifest(
+    path: Path | str = DEFAULT_MANIFEST_PATH,
+    *,
+    require_pin: bool = True,
+) -> FreezeManifest:
+    """Carica il manifest committato, ricalcola il `freeze_id`, rifiuta se diverge.
+
+    Questo sostituisce la ricostruzione a runtime che il rito Z1 del 18/08 ha
+    accertato in `scripts/run_day.py` (verbale RUN2 §A.2, precondizione
+    TL-007): il manifest ricostruito incorporava lo sha di git corrente, che
+    cambia a ogni commit, e le tre giornate di Stagione 0 produssero tre
+    `freeze_id` diversi, nessuno uguale a quello del manifest firmato e
+    timbrato. Qui il manifest si **legge**, non si ricostruisce.
+
+    Tre rifiuti, tutti espliciti:
+
+    1. il file non esiste, non è JSON, o non contiene un `FreezeManifest`
+       valido;
+    2. il `freeze_id` ricalcolato dal contenuto diverge da quello scritto nel
+       file — qualcuno ha toccato il manifest dopo la firma;
+    3. `pin_commit` è assente o è un segnaposto — il rito del pin non è ancora
+       avvenuto e non esiste una stagione da far girare.
+
+    `require_pin=False` esiste per gli strumenti che devono **leggere** un
+    manifest non ancora pinnato (per esempio per stamparlo). Il runner non lo
+    usa mai.
+    """
+    manifest_path = Path(path)
+    if not manifest_path.exists():
+        raise ManifestError(
+            f"manifest committato assente: {manifest_path}. Il runner carica "
+            f"il manifest, non lo ricostruisce (verbale RUN2 §A.2)."
+        )
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ManifestError(f"manifest illeggibile: {manifest_path} — {exc}") from exc
+
+    if not isinstance(document, dict) or "freeze_manifest" not in document:
+        raise ManifestError(f"manifest senza blocco 'freeze_manifest': {manifest_path}")
+    try:
+        manifest = FreezeManifest.model_validate(document["freeze_manifest"])
+    except Exception as exc:  # noqa: BLE001 - ri-alzato tipizzato
+        raise ManifestError(
+            f"blocco 'freeze_manifest' non valido in {manifest_path}: {exc}"
+        ) from exc
+
+    declared = document.get("freeze_id")
+    recomputed = manifest.freeze_id
+    if declared != recomputed:
+        raise ManifestError(
+            f"freeze_id divergente in {manifest_path}: il file dichiara "
+            f"{declared!r}, il ricalcolo sul contenuto dà {recomputed!r}. "
+            f"Il manifest è stato modificato dopo la firma, oppure è stato "
+            f"scritto da una versione diversa del contratto. Non si gira."
+        )
+
+    if require_pin and not manifest.is_pinned:
+        raise ManifestError(
+            f"pin_commit assente o segnaposto in {manifest_path} "
+            f"(valore: {manifest.pin_commit!r}). Il commit del rito del pin è "
+            f"ciò che rende il freeze_id fisso per la stagione (verbale RUN2 "
+            f"§A.2): finché non c'è, non esiste una stagione da far girare."
+        )
+    return manifest
+
+
 @dataclass(frozen=True, slots=True)
 class ArenaConfig:
     """Parametri della giornata di decisioni."""
@@ -181,6 +276,9 @@ def build_freeze_manifest(
     caching_policy: str = DEFAULT_CACHING_POLICY,
     agent_dir: Path = AGENT_DIR,
     context_git_sha: str | None = None,
+    pin_commit: str = "",
+    season_budget_usd: float | None = None,
+    thinking_declared: ThinkingDeclaration = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED,
 ) -> FreezeManifest:
     """Compone il manifest dal contenuto realmente congelato.
 
@@ -195,6 +293,11 @@ def build_freeze_manifest(
     è **sempre attivo e non disattivabile**, e sia `{"type": "disabled"}` sia
     `budget_tokens` producono 400. Anche qui la policy si realizza omettendo il
     parametro.
+
+    `pin_commit` e `season_budget_usd` restano vuoti finché non li valorizza il
+    **rito del pin**: sono i due campi che trasformano una composizione di
+    prova in un pin di stagione. Un manifest composto qui senza di loro è
+    leggibile ma non fa girare niente — vedi `load_pinned_manifest`.
     """
     context = load_context(agent_dir)
     return FreezeManifest(
@@ -204,10 +307,13 @@ def build_freeze_manifest(
         sampling_policy=SamplingPolicy.API_DEFAULT_OMITTED,
         max_tokens=max_tokens,
         thinking_policy=ThinkingPolicy.API_DEFAULT,
+        thinking_declared=thinking_declared,
         system_prompt_sha=context.system_prompt_sha,
         persona_sha=context.persona_sha,
         tool_schemas_sha=all_tool_schemas_sha(),
         context_git_sha=context_git_sha or current_git_sha(),
+        pin_commit=pin_commit,
+        season_budget_usd=season_budget_usd,
         caching_policy=caching_policy,
         ots_pending=True,
     )

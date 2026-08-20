@@ -28,8 +28,21 @@ Il controllo fa tre cose, indipendenti tra loro:
    disciplina di rete di `run_daily` per lo snapshot (CLAUDE.md §7). Non è mai
    bloccante: se i calendar non rispondono o l'attestazione non è pronta,
    l'esito finisce nel log e il controllo prosegue.
+4. **Verifica il ritmo di spesa della stagione** (D5): se la spesa cumulata
+   supera `ALARM_MULTIPLIER` volte il pro-rata del preventivo, è un'anomalia.
+   Non tocca l'exit code — la soglia che ferma le cose è quella dura, e vive
+   nel runner.
+
+**Il canale d'allarme** (verbale RUN2 §A.6, decisione D3). Su exit ≠ 0 o su
+anomalia rilevata il controllo scrive `ALLARME_<data>.txt` alla radice del
+repo, **con dentro il motivo**. Il file è gitignorato: è un segnale per
+l'owner che apre il laptop, non un artefatto del track record. Esiste perché
+un avviso `msg.exe` su una macchina senza sessione interattiva non compare, e
+un log che nessuno apre non è un allarme — il file invece resta lì finché
+qualcuno non lo guarda.
 
     uv run python scripts/morning_check.py
+    uv run python scripts/morning_check.py --force-alarm   # prova del canale
 """
 
 from __future__ import annotations
@@ -44,8 +57,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from arena.config import DEFAULT_MANIFEST_PATH, ManifestError, load_pinned_manifest
 from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH, RitualLog
 from ledger.ops_ledger import OpsLedger, recorded_days
+from ledger.spend import SEASON_EXPECTED_DAYS, check_prorata_alarm, season_spend
 from ledger.trader_ledger import TraderLedger
 from scripts.morning_report import generate_report
 from scripts.preflight import PreflightResult, format_table, run_preflight
@@ -65,10 +80,47 @@ DEFAULT_OTS_TARGETS: tuple[Path, ...] = (
     Path("docs/PREREG_LAB_S0.md"),
 )
 
+#: Nome del file d'allarme, alla radice del repo. Gitignorato (`ALLARME_*.txt`).
+ALARM_FILENAME = "ALLARME_{day}.txt"
+
 
 def log_path_for(day: date, log_dir: Path = DEFAULT_LOG_DIR) -> Path:
     """Un file per giornata di controllo, come per il rito quotidiano."""
     return Path(log_dir) / f"morning-{day.isoformat()}.log"
+
+
+def alarm_path_for(day: date, repo_root: Path) -> Path:
+    """`ALLARME_<data>.txt` alla radice del repo. Un file per giornata."""
+    return Path(repo_root) / ALARM_FILENAME.format(day=day.isoformat())
+
+
+def write_alarm(path: Path, day: date, reasons: list[str]) -> Path:
+    """Scrive il file d'allarme con dentro i motivi. Sovrascrive quello del giorno.
+
+    Sovrascrive e non appende: il file è la fotografia dello stato di **questa**
+    passata, e due passate nella stessa mattina non devono produrre un elenco
+    che cresce. Il registro di ciò che è successo è il log, non questo file.
+    """
+    corpo = [
+        f"ALLARME traderLab — {day.isoformat()}",
+        "",
+        "Il controllo del mattino ha rilevato quanto segue:",
+        "",
+    ]
+    corpo.extend(f"  {n}. {motivo}" for n, motivo in enumerate(reasons, start=1))
+    corpo.extend(
+        [
+            "",
+            f"Log della passata : data/logs/morning-{day.isoformat()}.log",
+            f"Log del rito      : data/logs/daily-{day.isoformat()}.log",
+            "",
+            "Questo file e' gitignorato: cancellarlo dopo averlo letto e' la",
+            "chiusura prevista. Nessun automatismo lo rimuove.",
+        ]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(corpo) + "\n", encoding="utf-8")
+    return path
 
 
 def subprocess_runner(command: list[str], env: dict[str, str]):
@@ -128,10 +180,20 @@ class MorningCheckResult:
     detail: str = ""
     preflight_ready: bool | None = None
     preflight_alert_shown: bool | None = None
+    # Canale d'allarme (§A.6 / D3). `alarm_file` è valorizzato solo se il file
+    # è stato davvero scritto; `alarm_reasons` porta i motivi che ci sono
+    # finiti dentro, nello stesso ordine.
+    alarm_file: Path | None = None
+    alarm_reasons: tuple[str, ...] = ()
+    budget_ok: bool | None = None
 
     @property
     def meaning(self) -> str:
         return EXIT_MEANING[self.exit_code]
+
+    @property
+    def alarm_raised(self) -> bool:
+        return self.alarm_file is not None
 
 
 def run_morning_check(
@@ -150,8 +212,17 @@ def run_morning_check(
     alert=default_alert,
     preflight=default_preflight_check,
     echo: bool = True,
+    manifest_path: Path | str = DEFAULT_MANIFEST_PATH,
+    expected_days: int = SEASON_EXPECTED_DAYS,
+    force_alarm: bool = False,
 ) -> MorningCheckResult:
-    """Esegue il controllo del mattino e ritorna l'esito. Non solleva."""
+    """Esegue il controllo del mattino e ritorna l'esito. Non solleva.
+
+    `force_alarm=True` scrive il file d'allarme comunque, con il motivo
+    "prova forzata". Serve a verificare che il canale funzioni **senza dover
+    rompere qualcosa** per provarlo: un allarme che nessuno ha mai visto
+    scattare è indistinguibile da un allarme che non scatta.
+    """
     log = RitualLog(path=log_path_for(today, log_dir), echo=echo)
     environment = dict(os.environ if env is None else env)
     toolcalls_dir = toolcalls_dir or ToolServerConfig().toolcall_log_dir
@@ -191,6 +262,7 @@ def run_morning_check(
 
     preflight_ready: bool | None = None
     preflight_alert_shown: bool | None = None
+    preflight_detail = ""
     try:
         preflight_result = preflight(
             repo_root=repo_root, env=environment, ledger_path=ledger_path, ops_path=ops_path
@@ -200,6 +272,7 @@ def run_morning_check(
     else:
         log.block("preflight per stanotte", format_table(preflight_result))
         preflight_ready = preflight_result.ready
+        preflight_detail = preflight_result.blocking_detail or ""
         if not preflight_result.ready:
             preflight_message = f"traderLab: stanotte NON partira' - {preflight_result.blocking_detail}"
             log.write(f"STOP: {preflight_message}")
@@ -216,6 +289,15 @@ def run_morning_check(
         else:
             log.write("preflight: pronto per stanotte")
 
+    # -- ritmo di spesa della stagione (D5) --------------------------------
+    budget_ok, budget_detail = _check_budget_rhythm(
+        trader_ledger=trader_ledger,
+        toolcalls_dir=toolcalls_dir,
+        manifest_path=manifest_path,
+        expected_days=expected_days,
+        log=log,
+    )
+
     is_monday = today.weekday() == 0 if is_monday is None else is_monday
     ots_attempted = False
     if is_monday:
@@ -231,6 +313,29 @@ def run_morning_check(
     else:
         log.write("upgrade OTS: non e' lunedi', salto")
 
+    # -- canale d'allarme (§A.6 / D3) --------------------------------------
+    reasons: list[str] = []
+    if force_alarm:
+        reasons.append(
+            "prova forzata del canale d'allarme (--force-alarm): nessuna "
+            "anomalia reale implicita in questo motivo"
+        )
+    if exit_code != EXIT_OK:
+        reasons.append(f"exit {exit_code} — {EXIT_MEANING[exit_code]}: {detail}")
+    if preflight_ready is False:
+        reasons.append(f"preflight NO per stanotte: {preflight_detail}")
+    if budget_ok is False:
+        reasons.append(f"ritmo di spesa oltre soglia (D5): {budget_detail}")
+
+    alarm_file: Path | None = None
+    if reasons:
+        alarm_file = write_alarm(alarm_path_for(today, repo_root), today, reasons)
+        log.write(f"ALLARME scritto in {alarm_file} — {len(reasons)} motivo/i")
+        for motivo in reasons:
+            log.write(f"    motivo: {motivo}")
+    else:
+        log.write("nessun allarme: nessun motivo rilevato, il file non viene creato")
+
     log.write(f"controllo del mattino concluso — exit {exit_code}")
     return MorningCheckResult(
         exit_code=exit_code,
@@ -241,7 +346,50 @@ def run_morning_check(
         detail=detail,
         preflight_ready=preflight_ready,
         preflight_alert_shown=preflight_alert_shown,
+        alarm_file=alarm_file,
+        alarm_reasons=tuple(reasons),
+        budget_ok=budget_ok,
     )
+
+
+def _check_budget_rhythm(
+    *,
+    trader_ledger: TraderLedger,
+    toolcalls_dir: Path,
+    manifest_path: Path | str,
+    expected_days: int,
+    log: RitualLog,
+) -> tuple[bool | None, str]:
+    """La stagione sta bruciando piu' in fretta del pro-rata? (D5)
+
+    Ritorna `(None, motivo)` quando la domanda **non si pone**: manifest
+    assente, non ancora pinnato, o senza `season_budget_usd`. Prima del rito
+    del pin è la situazione normale, e trasformarla in un allarme quotidiano
+    insegnerebbe all'owner a ignorare il file — che è il modo più efficace di
+    disattivare un allarme senza spegnerlo.
+
+    La soglia che **ferma** le cose non è questa: è quella dura, in
+    `scripts/run_day.py`. Questa sveglia soltanto.
+    """
+    try:
+        manifest = load_pinned_manifest(manifest_path, require_pin=False)
+    except ManifestError as exc:
+        log.write(f"ritmo di spesa: manifest non leggibile, controllo saltato — {exc}")
+        return None, str(exc)
+
+    if manifest.season_budget_usd is None:
+        log.write(
+            "ritmo di spesa: season_budget_usd non ancora valorizzato nel "
+            "manifest (si valorizza al rito del pin, D5) — controllo saltato"
+        )
+        return None, "season_budget_usd assente dal Freeze manifest"
+
+    spesa = season_spend(trader_ledger=trader_ledger, toolcalls_dir=toolcalls_dir)
+    verdetto = check_prorata_alarm(
+        spesa, manifest.season_budget_usd, expected_days=expected_days
+    )
+    log.write(f"ritmo di spesa: {verdetto.detail}")
+    return verdetto.ok, verdetto.detail
 
 
 def _attempt_ots_upgrade(
@@ -285,6 +433,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", default=str(DEFAULT_LEDGER_PATH))
     parser.add_argument("--ops-ledger", default=str(DEFAULT_OPS_PATH))
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
+    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH))
+    parser.add_argument("--expected-days", type=int, default=SEASON_EXPECTED_DAYS)
+    parser.add_argument(
+        "--force-alarm",
+        action="store_true",
+        help=(
+            "scrive comunque ALLARME_<data>.txt, con motivo 'prova forzata': "
+            "verifica il canale senza dover rompere niente per provarlo"
+        ),
+    )
     args = parser.parse_args(argv)
 
     today = datetime.now(tz=timezone.utc).date()
@@ -294,12 +452,21 @@ def main(argv: list[str] | None = None) -> int:
         ledger_path=Path(args.ledger),
         ops_path=Path(args.ops_ledger),
         log_dir=Path(args.log_dir),
+        manifest_path=Path(args.manifest),
+        expected_days=args.expected_days,
+        force_alarm=args.force_alarm,
     )
 
     print(f"\nlog             : {result.log_path}")
     print(f"exit code       : {result.exit_code} — {result.meaning}")
     if result.detail:
         print(f"dettaglio       : {result.detail}")
+    if result.alarm_file is not None:
+        print(f"ALLARME         : {result.alarm_file}")
+        for motivo in result.alarm_reasons:
+            print(f"                  - {motivo}")
+    else:
+        print("ALLARME         : nessuno")
     return result.exit_code
 
 

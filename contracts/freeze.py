@@ -15,6 +15,7 @@ None, così che il valore effettivo non venga mai confuso con "0" o "non so".
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import StrEnum
 from typing import Self
@@ -40,6 +41,34 @@ class ThinkingPolicy(StrEnum):
     DISABLED = "disabled"
 
 
+class ThinkingDeclaration(StrEnum):
+    """Cosa il pin DICHIARA sul thinking (verbale RUN2 §A.7).
+
+    `thinking_policy` dice quale configurazione è stata scelta; questa dice
+    cosa il client ha il diritto di mettere nel payload. Sono due cose diverse
+    e vanno tenute separate: la prima è una scelta di disegno, la seconda è un
+    invariante verificabile a ogni chiamata. Il client confronta il payload
+    che sta per inviare con questa dichiarazione e **rifiuta** se divergono —
+    così una `thinking` comparsa nel payload per errore non passa in silenzio.
+    """
+
+    # Il thinking è sempre attivo e non disattivabile: il parametro NON si
+    # invia. È l'unica forma valida sul modello pinnato in TL-002/TL-007.
+    ALWAYS_ON_PARAM_OMITTED = "always_on_param_omitted"
+    # Il parametro `thinking` viene inviato esplicitamente. Non è il caso del
+    # modello pinnato: esiste perché la dichiarazione sia un'alternativa vera
+    # e non un campo con un solo valore possibile.
+    EXPLICIT_PARAM_SENT = "explicit_param_sent"
+
+
+# `pin_commit` prende il posto di `context_git_sha` nel calcolo del
+# `freeze_id` (verbale RUN2 §A.2). Questi valori sono segnaposto: dicono
+# "non ancora pinnato", non un commit. Il runner li rifiuta.
+PIN_COMMIT_PLACEHOLDERS: frozenset[str] = frozenset(
+    {"", "0000000", "0" * 40, "PLACEHOLDER", "placeholder"}
+)
+
+
 class FreezeManifest(FrozenModel):
     """Manifesto di congelamento di una configurazione del Trader."""
 
@@ -57,12 +86,34 @@ class FreezeManifest(FrozenModel):
     top_k: int | None = None
     max_tokens: int = Field(gt=0)
     thinking_policy: ThinkingPolicy = ThinkingPolicy.API_DEFAULT
+    # Verbale RUN2 §A.7: quale forma di chiamata il pin autorizza sul
+    # thinking. Il client la verifica a ogni chiamata (vedi
+    # `ThinkingDeclaration`). Entra nel `freeze_id`: cambiarla è un cambio
+    # del protocollo di chiamata, alla pari di `sampling_policy`.
+    thinking_declared: ThinkingDeclaration = ThinkingDeclaration.ALWAYS_ON_PARAM_OMITTED
 
     # --- Contenuti congelati ---
     system_prompt_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
     persona_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_schemas_sha: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Sha del repo al momento in cui il manifest è stato COMPOSTO. Resta nel
+    # documento come dato di provenienza, ma **esce dal calcolo del
+    # `freeze_id`** (verbale RUN2 §A.2): cambia a ogni commit anche quando
+    # l'agente non è cambiato, e in Stagione 0 questo produsse tre `freeze_id`
+    # diversi in tre giornate, nessuno dei quali coincideva con quello del
+    # manifest firmato (TL-007).
     context_git_sha: str = Field(pattern=r"^[0-9a-f]{7,40}$")
+    # Commit del RITO DEL PIN: fisso per tutta la stagione. Prende il posto di
+    # `context_git_sha` dentro il `freeze_id`. Finché è un segnaposto il pin
+    # non esiste, e il runner si rifiuta di girare.
+    pin_commit: str = Field(default="", max_length=40)
+
+    # --- Guardia economica di stagione (D5) ---
+    # Preventivo vincolante della stagione, valorizzato al rito del pin. Il
+    # runner legge la spesa cumulata dal ledger e si rifiuta di girare oltre
+    # il multiplo dichiarato in `ledger.spend`. Assente = nessun preventivo
+    # firmato: anche quello è un rifiuto, non un via libera.
+    season_budget_usd: float | None = Field(default=None, gt=0.0)
 
     # --- Caching (RITO CACHING) ---
     # Descrizione dei blocchi marcati con `cache_control`. Solo costo e
@@ -108,7 +159,35 @@ class FreezeManifest(FrozenModel):
             raise ValueError("ots_pending=False richiede ots_proof_path")
         return self
 
+    @field_validator("pin_commit")
+    @classmethod
+    def _pin_commit_shape(cls, v: str) -> str:
+        """Segnaposto o sha di commit. Nient'altro, e mai in silenzio."""
+        if v in PIN_COMMIT_PLACEHOLDERS:
+            return v
+        if not re.fullmatch(r"[0-9a-f]{7,40}", v):
+            raise ValueError(
+                f"pin_commit deve essere uno sha di commit (7-40 esadecimali) "
+                f"o un segnaposto dichiarato, ricevuto {v!r}"
+            )
+        return v
+
+    @property
+    def is_pinned(self) -> bool:
+        """Vero solo se `pin_commit` porta davvero il commit del rito del pin."""
+        return self.pin_commit not in PIN_COMMIT_PLACEHOLDERS
+
     @property
     def freeze_id(self) -> str:
-        """Identificatore del segmento di track record aperto da questo pin."""
-        return sha256_of(self.canonical_payload(exclude={"ots_pending", "ots_proof_path"}))
+        """Identificatore del segmento di track record aperto da questo pin.
+
+        `context_git_sha` è **escluso** dal calcolo (verbale RUN2 §A.2). Al suo
+        posto entra `pin_commit`, che è fisso per tutta la stagione: così il
+        `freeze_id` di una giornata non cambia solo perché nel frattempo è
+        stato fatto un commit qualsiasi nel repo.
+        """
+        return sha256_of(
+            self.canonical_payload(
+                exclude={"ots_pending", "ots_proof_path", "context_git_sha"}
+            )
+        )

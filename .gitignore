@@ -28,3 +28,10 @@ REPORT_*.md
 
 # Materiale grezzo di lavoro (elicitation, script usa-e-getta, log di corsa).
 scratchpad/
+
+# Canale d'allarme del controllo mattutino (verbale RUN2 §A.6, decisione D3).
+# scripts/morning_check.py scrive ALLARME_<data>.txt alla radice del repo su
+# exit != 0 o su anomalia rilevata. E' un segnale per l'owner che apre il
+# laptop, non un artefatto del track record: non si committa e non
+# sopravvive a un clone.
+ALLARME_*.txt

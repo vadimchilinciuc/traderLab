@@ -28,7 +28,12 @@ from toolserver.config import BUILDER_VERSION, SnapshotConfig
 from toolserver.errors import ToolServerError
 
 FALLBACK_SPREAD_BPS = 3.0
-FALLBACK_DEPTH_USD = 250_000.0
+# Profondità a 1%: **costante dichiarata**, non una stima (foglio 19/08 punto
+# 15). Il builder la scrive identica in ogni ramo, e lo snapshot la etichetta
+# come tale in `LiquidityEstimate.depth_source`. Il nome vecchio,
+# `FALLBACK_DEPTH_USD`, suggeriva un ripiego usato solo quando il book manca:
+# non è mai stato così.
+DECLARED_DEPTH_USD = 250_000.0
 DAY = timedelta(days=1)
 
 # Cadenza di funding usata solo quando la serie è troppo corta per osservarla.
@@ -243,7 +248,15 @@ class SnapshotBuilder:
 
     @staticmethod
     def _liquidity(ctx: dict[str, Any]) -> LiquidityEstimate:
-        """Spread e depth **stimati**, con lo stimatore dichiarato nel record."""
+        """Spread stimato dal book; profondità **costante dichiarata**.
+
+        Foglio 19/08 punto 15. Lo spread è una stima vera — dai prezzi di
+        impatto quando ci sono, dal fallback statico quando mancano, e
+        `estimator` dice quale dei due. La profondità no: sono 250.000 USD in
+        entrambi i rami, sempre, indipendentemente dal book. `depth_source` lo
+        dichiara **dentro il record**, non solo in questo commento, perché il
+        record sopravvive al commento.
+        """
         impact = ctx.get("impactPxs")
         mid = _to_float(ctx.get("midPx")) or _to_float(ctx.get("markPx"))
         if isinstance(impact, list) and len(impact) == 2 and mid and mid > 0.0:
@@ -251,12 +264,14 @@ class SnapshotBuilder:
             if bid and ask and ask >= bid:
                 return LiquidityEstimate(
                     spread_bps=min((ask - bid) / mid * 10_000.0, 10_000.0),
-                    depth_usd_1pct=FALLBACK_DEPTH_USD,
+                    depth_usd_1pct=DECLARED_DEPTH_USD,
+                    depth_source="costante_dichiarata",
                     estimator="hyperliquid_impact_px_v0",
                 )
         return LiquidityEstimate(
             spread_bps=FALLBACK_SPREAD_BPS,
-            depth_usd_1pct=FALLBACK_DEPTH_USD,
+            depth_usd_1pct=DECLARED_DEPTH_USD,
+            depth_source="costante_dichiarata",
             estimator="static_fallback_v0",
         )
 
