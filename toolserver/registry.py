@@ -108,8 +108,10 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {
         "name": "get_costs",
         "description": (
-            "Restituisce le commissioni maker e taker in basis point e le stime di "
-            "spread e profondità per un simbolo, con il nome dello stimatore usato."
+            "Restituisce, per un simbolo, le commissioni maker e taker in basis "
+            "point, la stima dello spread dal book — con il nome dello stimatore "
+            "usato — e la profondità dichiarata entro l'1% dal mid, che è una "
+            "costante del costruttore dello snapshot, non una misura."
         ),
         "strict": True,
         "input_schema": _schema({"symbol": _SYMBOL_PROP}, ["symbol"]),

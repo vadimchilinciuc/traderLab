@@ -41,7 +41,10 @@ PRIMITIVE_FEATURES: MappingProxyType[str, str] = MappingProxyType(
         "rank_realized_vol_20d": "Posizione nell'universo per volatilità a 20 barre.",
         # Microstruttura / costi
         "spread_bps": "Spread stimato in basis point.",
-        "depth_usd_1pct": "Profondità stimata in USD entro l'1% dal mid.",
+        "depth_usd_1pct": (
+            "Profondità dichiarata in USD entro l'1% dal mid: una costante "
+            "del costruttore dello snapshot, non una misura."
+        ),
         "cost_taker_bps": "Commissione taker in basis point.",
         "cost_maker_bps": "Commissione maker in basis point.",
     }

@@ -44,7 +44,8 @@ I dati si leggono con questi strumenti:
 - `get_ohlcv` — barre giornaliere di un simbolo.
 - `get_funding` — funding rate del perpetuo di un simbolo.
 - `get_rankings` — posizione dei simboli nelle classifiche cross-sezionali.
-- `get_costs` — commissioni, spread stimato, profondità stimata.
+- `get_costs` — commissioni, spread stimato, profondità dichiarata (una
+  costante del costruttore dello snapshot, non una misura).
 - `get_asset_dossier` — tutte le grandezze primitive di un simbolo in una volta.
 
 Usa gli strumenti che ti servono. Se una grandezza non è calcolabile con lo
