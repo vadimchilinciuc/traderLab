@@ -295,6 +295,62 @@ un'altra strada — coerente con la cautela 7.
 **Fonte**: dossier
 `zeroPipes/docs/research/2026-08-20_DOSSIER_RND_FRONTIERA.md`, **§scheda 3**.
 
+### Annesso L1-F (dossier caccia, 20/08) — uno stimatore che sopravvive all'unanimità
+
+*Aggiunta in append. Il testo della voce sopra non è stato modificato.*
+
+La guardia della regola 49 incisa sopra dichiara che il caso degenere —
+sonde unanimi ⇒ rho indefinito — deve restituire **`n/d`**. Il dossier
+`zeroPipes/docs/research/2026-08-20_DOSSIER_CACCIA.md`, **§L1-F**, osserva che
+quel caso non è raro ma è lo **scenario più probabile**: le repliche convergono
+sull'azione, e la Stagione 0 ha prodotto sei confidence identiche a 0,55. Lo
+stimatore registrato rischia quindi di dichiararsi cieco proprio nella cella
+che si verificherà.
+
+**Lo stimatore complementare.** Il testo dei verbali, a differenza delle
+azioni, non è mai identico. Si affianca quindi a Fleiss/ICC una **NCD a
+coppie** (*normalized compression distance*) fra i `rationale_text`
+**normalizzati** delle sonde, con la distribuzione delle distanze riportata
+separatamente per **sonda nulla**, **sonda cieca** e **mondi reali** — gli
+stessi tre insiemi della specifica minima sopra. **Zero chiamate API
+aggiuntive**: i file delle sonde del RUN2 sono prodotti comunque, e questa è
+lettura di quei file.
+
+**Cosa si congela prima dell'esecuzione.** Tre scelte, e vanno fissate prima di
+vedere le distanze, non dopo: (i) la **normalizzazione del testo** (quali parti
+del verbale entrano, come si trattano numeri, spaziatura e maiuscole); (ii) il
+**compressore** e i suoi parametri, perché la NCD è definita rispetto a un
+compressore e cambiarlo cambia il numero; (iii) la **gestione del confondente
+di lunghezza** — la compressione dipende dalla taglia delle stringhe, ed è il
+modo noto in cui una NCD misura la prolissità invece della diversità.
+
+**Caso degenere (regola 49).** Testi identici ⇒ **NCD ≈ 0, dichiarato come
+tale**, non arrotondato a zero né presentato come accordo perfetto. È il
+simmetrico della guardia sopra: dove Fleiss/ICC danno `n/d`, qui si dà un
+numero; dove qui il numero degenera, lo si dice.
+
+**Rapporto con la voce sopra: rammendo, non sostituzione.** La NCD **non
+sostituisce** Fleiss/ICC e non tocca la soglia dichiarativa `k_eff < 1,5`, né
+la clausola incisa che tiene questa idea fuori dal gate A.9 (firma **F2**).
+Vive **soltanto** nella cella dove gli stimatori registrati restituiscono
+`n/d`, e con lo stesso statuto: descrittiva, senza potere di verdetto.
+
+**Cosa la falsificherebbe.** NCD **indistinguibile** fra sonda cieca e mondi
+reali: la diversità testuale non porterebbe informazione che l'accordo di
+azione non abbia già, e il metro si archivia. Oppure NCD **dominata dalla
+lunghezza**: allora il risultato del rito è la dichiarazione che serve una
+normalizzazione migliore, congelata prima di un secondo tentativo.
+
+**Perimetro di questo rito.** In **questo** rito **nessun file di sonda viene
+aperto**: si registra la specifica, non si esegue. Il trigger resta quello
+della voce sopra — sonde del RUN2 eseguite, lettura del gate A.9 non ancora
+avvenuta — e l'esecuzione resta subordinata all'autorizzazione dell'owner.
+
+**Fonte**: dossier
+`zeroPipes/docs/research/2026-08-20_DOSSIER_CACCIA.md`, **§L1-F** (derivata da
+**L0-24**); base di letteratura citata nel novelty check del dossier, **§N6**
+(Cilibrasi & Vitányi, arXiv:1212.5711; arXiv:2501.13480).
+
 ---
 
 ## La terza sonda — invarianza sotto perturbazioni semanticamente nulle (dossier §scheda 6)
@@ -542,3 +598,76 @@ stretti: l'agente non segue il funding, e la baseline si archivia come
 
 **Fonte**: dossier
 `zeroPipes/docs/research/2026-08-20_DOSSIER_RND_FRONTIERA.md`, **§scheda 9**.
+
+---
+
+## Proposta di emendamento CLAUDE.md §1 — codificatore di testo a posteriori (Sfida 3, dossier caccia)
+
+- **Numero di programma**: non ancora assegnato
+  (`zeroPipes/docs/program/CODA.md`, §6 voce 9).
+- **Stato**: **PROPOSTA. NON in vigore.** Il `CLAUDE.md` §1 di questo repo
+  vale oggi nella sua forma intera e non è stato modificato da questa voce.
+  Registrarla significa fissarne la forma prima di averne bisogno, non
+  adottarla.
+- **Trigger**: **due condizioni, entrambe necessarie** — (a) la **prima
+  analisi post-RUN2 che ne abbia effettivamente bisogno**, cioè una domanda a
+  cui non si può rispondere senza leggere la prosa dei verbali; (b) la
+  **firma dell'owner**. Senza (b) la proposta resta registrata e inerte anche
+  se (a) si verifica.
+- **Natura**: proposta di emendamento a un contratto di ingegneria. Non è un
+  cantiere, non è codice, non autorizza alcuna chiamata.
+
+**Il testo dell'emendamento proposto.** Al §1 si aggiungerebbe:
+
+> «Fa eccezione un LLM usato come **codificatore di testo libero a
+> posteriori**, fuori da ogni percorso di decisione e da ogni percorso di
+> verdetto, a stagione chiusa, che (i) non vede mai le azioni, le confidence,
+> gli esiti né l'identità della replica; (ii) esegue un compito di codifica
+> dichiarato in una tassonomia congelata e hashata prima; (iii) è
+> doppio-codificato contro un sottocampione codificato da un umano, con κ
+> riportato; (iv) produce una misura descrittiva che non può entrare in un
+> gate. La proibizione del secondo LLM come critico, reporter di attribuzione,
+> supervisore o giudice resta intera.»
+
+**Le quattro condizioni, trascritte per esteso.** Nessuna è opzionale e
+nessuna vale da sola:
+
+1. **Cecità.** Il codificatore **non vede mai** le azioni, le confidence, gli
+   esiti, né l'identità della replica. Vede prosa e nient'altro.
+2. **Tassonomia congelata e hashata prima.** Lo schema di codifica esiste, è
+   fissato e il suo digest è registrato **prima** che il primo verbale venga
+   codificato. Una tassonomia aggiustata dopo aver visto i testi è una
+   tassonomia tarata sull'esito.
+3. **Doppia codifica con κ riportato.** Un sottocampione è codificato **da un
+   umano** e il κ di accordo si riporta. È la condizione che il dossier
+   dichiara non removibile: senza il sottocampione umano non c'è modo di
+   sapere se il codificatore ha inventato.
+4. **Misura descrittiva, mai in un gate.** L'uscita non entra in un percorso
+   di verdetto, non compone un criterio, non muove una soglia.
+
+**Perché la proposta esiste.** Il `PROGRAM_LEDGER` §7.1 punto 6 registra che
+`features_used` **sotto-dichiara**: nei verbali del 17/08 compaiono grandezze
+discusse nella prosa del `rationale_text` ma assenti dall'elenco. L'**Idea
+#6** registrata sopra misura la coerenza fra tool-call e `features_used`, ma
+nessuno strumento del Lab legge la **prosa**, che è l'unico posto dove le
+feature non dichiarate compaiono. Codificare quella prosa a mano costa
+ore-owner, che è il budget vincolante del programma; l'alternativa reale
+all'emendamento non è «lo fa un umano», è «non lo fa nessuno».
+
+**Cosa si rischia, dichiarato prima.** Che il **pregiudizio del codificatore**
+entri in una misura che poi informa un disegno — lo stesso rischio che il §1
+esiste per escludere, spostato di un passo. Le quattro condizioni sono la
+mitigazione, e la terza è quella che non si può togliere. Rischio secondario e
+più insidioso: il **precedente**. Ammesso un LLM «fuori dal loop», il confine
+si sposta con argomenti ogni volta ragionevoli. Se l'owner ritiene che il
+valore del confine netto superi il valore della misura, **la proposta va
+respinta** — e sarebbe una decisione difendibile, da registrare come tale.
+
+**Cosa resta invariato in ogni caso.** Il §1 nella sua forma attuale: un solo
+componente LLM nel percorso di decisione, nessun secondo agente critico,
+reporter di attribuzione, supervisore o giudice. L'emendamento, se mai
+adottato, non tocca quella proibizione: ritaglia una singola eccezione,
+descrittiva, a stagione chiusa e cieca agli esiti.
+
+**Fonte**: dossier
+`zeroPipes/docs/research/2026-08-20_DOSSIER_CACCIA.md`, **§Sfida 3**.
