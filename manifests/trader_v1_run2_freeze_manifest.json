@@ -2,7 +2,7 @@
   "_pin": {
     "campi_lasciati_come_stavano_e_perche": {
       "context_git_sha": "resta a a924da0, il commit del passo 0 del rito T3, come dato di provenienza della composizione. E' ESCLUSO dal calcolo del freeze_id (verbale RUN2 A.2), quindi non tocca ne' il pin ne' il timbro",
-      "ots_pending / ots_proof_path": "true / null a questo passo: il timbro si appone DOPO il commit del manifest, sui byte del suo BLOB. Il flip a false avviene in un commit dedicato e NON cambia il freeze_id - entrambi i campi sono esclusi dal calcolo, verificato con un assert dal rito",
+      "ots_pending / ots_proof_path": "FLIP ESEGUITO nel commit D del rito, dopo il commit C che porta i due .ots: ots_pending = false, ots_proof_path = il timbro di questo stesso file. Il digest che quel timbro certifica e' quello del BLOB AL COMMIT B, cioe' i byte di questo file PRIMA del flip: 7d1ae97f9d218c1591e5f7915dc9edf56a8ef7f954a96dfdb961bf8edeaef676. E' voluto e non e' una perdita: entrambi i campi sono ESCLUSI dal calcolo del freeze_id (contracts/freeze.py, freeze_id esclude ots_pending, ots_proof_path e context_git_sha), quindi il flip lascia il freeze_id invariato a 2136b199...d03f02 - verificato con un assert prima di scrivere. Cio' che il timbro ancora e' il PIN, e il pin non e' cambiato.",
       "pinned_at_utc": "2026-08-20, la data del pin, gia' dichiarata in bozza"
     },
     "cosa_ha_valorizzato_questo_rito": {
@@ -48,8 +48,8 @@
     "max_tokens": 8000,
     "model_string": "claude-opus-5",
     "model_string_note": "TL-007 (18/08/2026): il modello del Trader passa da claude-fable-5 a claude-opus-5. La string e' completa cosi' com'e'. Tier dichiarato: NON di punta (ratifica R-B dell'owner, 20/08/2026) - il RUN2 e' la stagione 1 di 2 del budget di classe «agente LLM discrezionale», e la stagione 2, se serve, gira sul modello di punta. Da ri-verificare contro l'endpoint con scripts/verify_pin.py il giorno del pin.",
-    "ots_pending": true,
-    "ots_proof_path": null,
+    "ots_pending": false,
+    "ots_proof_path": "manifests/trader_v1_run2_freeze_manifest.json.ots",
     "persona_sha": "d4680c6401daeb1f83c45ce5a1e5eefcc6d20edf526ea4439ceb6fd989ad0de3",
     "pin_commit": "afc40d9500ace54b9cfbaebff440abae075cf4ae",
     "pinned_at_utc": "2026-08-20T00:00:00Z",
