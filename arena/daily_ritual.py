@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from arena.config import DEFAULT_MANIFEST_PATH
 from arena.llm_client import RETRYABLE_PROCESS_EXIT_CODE
 from ledger.ops_ledger import (
     OpsEvent,
@@ -76,7 +77,18 @@ RITUAL_RETRY_MAX_ATTEMPTS = 3
 RITUAL_RETRY_WAIT_SECONDS = 15 * 60.0
 
 DEFAULT_LOG_DIR = Path("data/logs")
-DEFAULT_LEDGER_PATH = Path("data/ledger/season0.jsonl")
+#: Ledger dei verbali del segmento di track record in corso. **Un file per
+#: segmento**: il RUN2 gira su `claude-opus-5`, la Stagione 0 girò su
+#: `claude-fable-5`, e un verbale del RUN2 in coda a `season0.jsonl` finirebbe
+#: nella stessa catena append-only di un modello diverso — che CLAUDE.md §10
+#: vieta («cambio modello = nuovo track record») e che CLAUDE.md §9 rende non
+#: rimediabile a posteriori, perché una riga di ledger non si riscrive.
+#:
+#: Il file **non si crea qui**: `TraderLedger` mkdir soltanto la cartella e
+#: apre in append alla prima riga scritta, cioè al primo verbale della prima
+#: giornata. `verify()` su un file che non esiste è verde con zero righe, e
+#: `season_spend` su zero righe vale $0,00 con `days_executed = 0`.
+DEFAULT_LEDGER_PATH = Path("data/ledger/season0_run2.jsonl")
 DEFAULT_OPS_PATH = Path("data/ledger/ops.jsonl")
 
 _SNAPSHOT_ID_RE = re.compile(r"snapshot_id\s*:\s*([0-9a-f]{64})")
@@ -148,6 +160,7 @@ def run_daily(
     python_executable: str,
     live: bool = False,
     ledger_path: Path = DEFAULT_LEDGER_PATH,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
     ops_path: Path = DEFAULT_OPS_PATH,
     log_dir: Path = DEFAULT_LOG_DIR,
     require_configured_hour: bool = False,
@@ -165,6 +178,13 @@ def run_daily(
     log.write(f"ora UTC configurata per il rito : {snapshot_hour_utc:02d}:00")
     log.write(f"ora UTC di questa passata       : {now_utc.strftime('%H:%M')}")
     log.write(f"modalita'                       : {'LIVE' if live else 'mock'}")
+    # Le due righe che mancavano. La notte del 2026-08-21 il rito ha caricato
+    # il manifest della Stagione 0 e nessuna riga di log lo diceva: si e'
+    # potuto stabilire quale manifest fosse stato letto solo dal messaggio
+    # d'errore. Cosa il rito carica e dove scrive e' un dato, non un dettaglio
+    # implementativo (DIAGNOSI_G1, reperto A).
+    log.write(f"manifest della stagione         : {manifest_path}")
+    log.write(f"ledger dei verbali              : {ledger_path}")
 
     if require_configured_hour and now_utc.hour != snapshot_hour_utc:
         detail = (
@@ -264,6 +284,8 @@ def run_daily(
         snapshot_id,
         "--ledger",
         str(ledger_path),
+        "--manifest",
+        str(manifest_path),
     ]
     if live:
         command.append("--live")

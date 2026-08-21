@@ -20,6 +20,7 @@ from pathlib import Path
 
 from contracts.decision import Action
 from contracts.risk import RiskOutcome, RiskRule, RiskVerdict
+from ledger.ops_ledger import OpsEvent, OpsKey, OpsLedger
 from ledger.trader_ledger import LedgerKey, TraderLedger
 from scripts.morning_check import alarm_path_for, run_morning_check
 from scripts.preflight import CheckResult, PreflightResult
@@ -455,14 +456,31 @@ def test_fuori_stagione_le_altre_anomalie_allarmano_lo_stesso(tmp_path):
     assert "exit 1" not in testo
 
 
-def test_un_manifest_illeggibile_vale_nessuna_stagione_e_lo_dichiara(tmp_path):
+def test_un_manifest_illeggibile_vale_nessuna_stagione_e_ALLARMA(tmp_path):
     """Terzo caso: il manifest c'e' ma non si carica.
 
     Assente, illeggibile o con `freeze_id` divergente sono la stessa risposta
-    — non c'e' una stagione — e la distinzione fra loro sta nel motivo, che
-    finisce nel log. Non e' un allarme: un manifest rotto e' un problema del
-    rito del pin, non della notte appena passata, e il runner lo rifiuta gia'
-    da se'.
+    alla domanda «c'e' una stagione attiva?» — no — e la distinzione fra loro
+    sta nel motivo, che finisce nel log.
+
+    **Questo test diceva il contrario fino al 2026-08-21**, e la riga che
+    diceva era: «Non e' un allarme: un manifest rotto e' un problema del rito
+    del pin, non della notte appena passata, e il runner lo rifiuta gia' da
+    se'». La misura l'ha smentita. Il 20/08 il manifest di default era gia'
+    irricevibile per `freeze_id` divergente; il controllo del mattino lo
+    scrisse nel log come «stagione: nessuna», rispose PRONTO PER STANOTTE: SI
+    e conclude' exit 0 **senza allarme**, due volte nella stessa giornata. La
+    notte seguente il rito uscì 4 sulla stessa causa (DIAGNOSI_G1 §1-bis).
+
+    Il difetto del ragionamento vecchio: «il runner lo rifiuta gia' da se'» e'
+    vero e irrilevante. Il rifiuto del runner arriva a mezzanotte, quando non
+    c'e' piu' tempo per ripararlo; il controllo del mattino esiste proprio per
+    anticiparlo di diciassette ore. Un guasto che il sistema conosce e non
+    dice e' peggio di un guasto che non conosce.
+
+    Resta muto, e deve restare muto, il manifest **sano ma non ancora
+    pinnato**: quello e' il cantiere fermo, non un guasto — ed e' il caso di
+    `test_verbali_mancanti_allarmano_in_stagione_e_tacciono_fuori`.
     """
     rotto = tmp_path / "rotto.json"
     rotto.write_text("{ questo non e' JSON", encoding="utf-8")
@@ -470,7 +488,71 @@ def test_un_manifest_illeggibile_vale_nessuna_stagione_e_lo_dichiara(tmp_path):
     esito = _controllo(tmp_path, manifest_path=rotto)
 
     assert esito.season_active is False
+    # L'exit code resta governato dalla sola domanda sui verbali di stanotte:
+    # e' l'ALLARME il canale del guasto (verbale RUN2 §A.6 / D3).
     assert esito.exit_code == 0
-    assert not esito.alarm_raised
+    assert esito.alarm_raised
+    motivi = " ".join(esito.alarm_reasons)
+    assert "manifest del rito inutilizzabile" in motivi
+    assert "NON puo' girare" in motivi
     testo = esito.log_path.read_text(encoding="utf-8")
     assert "stagione: nessuna" in testo
+
+
+def test_un_manifest_sano_ma_non_pinnato_resta_muto(tmp_path):
+    """Il contro-test del precedente, e il confine fra i due.
+
+    Senza questo, la riparazione del 21/08 sarebbe indistinguibile da «allarma
+    sempre quando non c'e' stagione», che e' il modo piu' efficace di
+    disattivare un allarme senza spegnerlo. Un manifest che si **carica** e
+    non e' ancora pinnato e' lo stato normale di un cantiere prima del rito
+    del pin: non e' un guasto e non suona.
+    """
+    esito = _controllo(tmp_path, manifest_path=_senza_stagione(tmp_path))
+
+    assert esito.season_active is False
+    assert not esito.alarm_raised
+
+
+def test_il_rito_notturno_fallito_allarma_dal_registro_operativo(tmp_path):
+    """L'esito ≠ 0 della notte si legge dal registro operativo del Lab.
+
+    Non dal `LastTaskResult` del Task Scheduler: quello e' un solo numero che
+    la passata successiva sovrascrive, mentre il registro operativo e'
+    append-only con hash-chain. La notte del 2026-08-21 scrisse `run_failed` e
+    la mattina non aveva modo di accorgersene.
+    """
+    # Lo stesso percorso che `_controllo` passa al controllo del mattino.
+    ops = OpsLedger(tmp_path / "ledger" / "ops.jsonl")
+    ops.append(
+        key=OpsKey.of(OGGI, OpsEvent.RUN_FAILED),
+        detail="run_day.py ha restituito 2",
+    )
+
+    esito = _controllo(tmp_path)
+
+    assert esito.alarm_raised
+    motivi = " ".join(esito.alarm_reasons)
+    assert "esito del rito di stanotte" in motivi
+    assert "run_failed" in motivi
+
+
+def test_un_preflight_che_solleva_e_un_NO_non_un_silenzio(tmp_path):
+    """La dottrina, in una riga: un controllo non eseguibile e' FAIL, mai PASS.
+
+    Prima, un'eccezione nel preflight lasciava `preflight_ready` a `None`: il
+    controllo spariva dalla tabella, non entrava nei motivi d'allarme e la
+    mattina concludeva exit 0. Un controllo che non gira non e' un controllo
+    verde.
+    """
+
+    def _preflight_che_esplode(**kwargs):
+        raise RuntimeError("il sotto-processo non parte")
+
+    esito = _controllo(tmp_path, preflight=_preflight_che_esplode)
+
+    assert esito.preflight_ready is False
+    assert esito.alarm_raised
+    motivi = " ".join(esito.alarm_reasons)
+    assert "preflight NO per stanotte" in motivi
+    assert "non eseguibile" in motivi

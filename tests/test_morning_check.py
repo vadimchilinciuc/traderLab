@@ -330,7 +330,22 @@ def test_preflight_non_pronto_e_giornata_mancante_mostrano_due_avvisi(percorsi):
     assert "stanotte NON partira'" in allarme.messages[1]
 
 
-def test_preflight_che_solleva_non_blocca_il_controllo(percorsi):
+def test_preflight_che_solleva_non_blocca_il_controllo_ma_e_un_NO(percorsi):
+    """Un preflight che non gira non blocca il controllo, e **non e' un PASS**.
+
+    Le due meta' della regola, che vanno tenute insieme. Non blocca: l'exit
+    code resta governato dalla sola domanda sui verbali di stanotte, e un
+    sotto-processo che non parte non deve trasformare una giornata riuscita in
+    un fallimento. Non e' un PASS: `preflight_ready` diventa **False**, non
+    `None`.
+
+    Prima restava `None`, e un controllo non eseguito spariva — niente nella
+    tabella, niente nei motivi d'allarme, exit 0. E' la stessa forma del
+    difetto misurato il 20/08/2026, quando il preflight rispose PRONTO PER
+    STANOTTE: SI su un manifest gia' irricevibile: in entrambi i casi
+    l'assenza di una verifica veniva riportata come il suo esito favorevole
+    (DIAGNOSI_G1, dottrina del PASS finto).
+    """
     ledger = TraderLedger(percorsi["ledger_path"])
     _scrivi_giornata(ledger, OGGI)
 
@@ -340,9 +355,10 @@ def test_preflight_che_solleva_non_blocca_il_controllo(percorsi):
     esito = _controllo(percorsi, preflight=preflight_che_solleva)
 
     assert esito.exit_code == EXIT_OK
-    assert esito.preflight_ready is None
+    assert esito.preflight_ready is False
     testo = esito.log_path.read_text(encoding="utf-8")
     assert "preflight" in testo and "eccezione" in testo
+    assert "PRONTO PER STANOTTE: NO" in testo
 
 
 # --------------------------------------------------------------------------

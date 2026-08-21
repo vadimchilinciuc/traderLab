@@ -552,3 +552,222 @@ porta il listino: scrive `non calcolabile — listino assente dal Freeze
 manifest` e lascia i token. Finché il rito del pin del RUN2 non è avvenuto,
 questa è la riga che si vedrà, ed è corretta — la riga precedente era una
 cifra calcolata al listino di un modello diverso da quello pinnato.
+
+
+---
+
+## TL-011 — Autorizzazione al primo giorno del RUN2 (PREREG §13 passo 12)
+
+- **Data**: 2026-08-21
+- **Stato**: attiva
+- **Decisa da**: l'owner (Sanji), 21/08/2026, per delega esplicita nel prompt
+  del rito di riparazione del cablaggio RUN2 (`FIX_G1`).
+- **Supera**: nulla. **Chiude** il passo **12** del §13 di
+  `docs/PREREG_LAB_S0_RUN2.md`, l'ultimo rimasto aperto della checklist del
+  rito del pin.
+
+**Dove va incisa, e perché qui.** Il §13 passo 12 pretende «autorizzazione
+esplicita dell'owner al primo giorno» e **non prescrive né la forma né la
+sede**: la colonna «Stato» di quella riga porta un trattino. Le firme del RUN2
+(F1…F14, F9-bis, F12-bis) vivono nel §14 del PREREG, ma quel documento è
+**congelato e timbrato** — `docs/PREREG_LAB_S0_RUN2.md.ots`, e il manifest lo
+riferisce con `rito_config.prereg_ref.commit = afc40d95…` — quindi non lo si
+tocca. In assenza di sede prescritta, la sede è questo registro, in append.
+
+**Il testo autorizzato, per esteso:**
+
+> AUTORIZZAZIONE AL PRIMO GIORNO (Sanji, 21/08/2026): il RUN2 inizia con la
+> giornata il cui snapshot è delle 00:00 UTC del 22/08/2026. Il tentativo
+> delle 00:00 UTC del 21/08 NON è una giornata della stagione: guardia del
+> freeze scattata su manifest sbagliato per difetto di cablaggio
+> (DIAGNOSI_G1), zero chiamate, $0,00; lo snapshot e6404c11… resta archiviato
+> come artefatto pre-stagione e non entra in alcun conteggio. I contatori del
+> §7.2 decorrono dal primo giorno di stagione.
+
+**I numeri che l'autorizzazione presuppone**, trascritti per esteso perché
+questa voce deve reggere da sola quando il referto che li ha prodotti non
+esisterà più (i referti dei riti sono gitignorati):
+
+| Grandezza | Valore, al 2026-08-21 |
+| --- | --- |
+| Chiamate all'API del modello nella notte del 21/08 | **zero** |
+| Dollari spesi nella notte del 21/08 | **$0,00** |
+| Snapshot pre-stagione archiviato | `e6404c11c046f7e942fcee569cd33a136c6050b2edbdcc5ccd577fcf021367bd`, `asof_utc = 2026-08-21T00:00:00+00:00`, 852.894 byte |
+| Verbali nel ledger del RUN2 | **0** — il file `data/ledger/season0_run2.jsonl` non esiste ancora |
+| Spesa cumulata del RUN2 | **$0,00**, `days_executed = 0` su **28** giornate attese |
+| `freeze_id` pinnato, dichiarato e ricalcolato | `2136b199210dd9f231ba8faef3bd764161585167256640373c4ddc1e23d03f02` |
+| Modello pinnato | `claude-opus-5` |
+
+**Il vincolo di calendario che questa autorizzazione consuma.** Il §7 del
+PREREG fissa la partenza «entro il **2026-09-13**»; con il primo giorno al
+22/08 restano **22 giorni** di margine. Il cap di calendario di 42 giorni
+decorre dal **primo giorno con verbali**, non da questa firma: al 21/08 non è
+in pericolo, perché verbali non ce ne sono.
+
+**Cosa questa voce NON autorizza.** Non autorizza un recupero della giornata
+del 21/08 né di alcuna giornata precedente: una decisione presa oggi su uno
+snapshot di ieri vedrebbe un futuro che il Trader di allora non aveva
+(`CLAUDE.md` §5). Lo snapshot `e6404c11…` resta sul disco come artefatto, e il
+suo essere completo e integro — verificato dalla DIAGNOSI_G1 — **non** è una
+ragione per consumarlo. Non autorizza nemmeno un rilancio manuale: il primo
+giorno è quello schedulato, alle 00:00 UTC del 22/08.
+
+---
+
+## TL-012 — I record del 19-21/08 sono PRE-STAGIONE e non contano per il §7.2
+
+- **Data**: 2026-08-21
+- **Stato**: attiva
+- **Decisa da**: l'owner (Sanji), 21/08/2026, per delega esplicita nel prompt
+  del rito `FIX_G1`.
+- **Supera**: nulla. È un'**annotazione di lettura** su tre righe del registro
+  operativo, non una loro modifica.
+
+**I fatti.** Il registro operativo `data/ledger/ops.jsonl` porta tre righe
+scritte tutte alle `2026-08-21T00:00:03Z`, `seq` 3, 4 e 5:
+
+| `seq` | Chiave | Dettaglio |
+| ---: | --- | --- |
+| 3 | `{"day": "2026-08-19", "event": "skipped_day"}` | «nessuna decisione registrata; ultimo giorno con una traccia: 2026-08-18» |
+| 4 | `{"day": "2026-08-20", "event": "skipped_day"}` | idem |
+| 5 | `{"day": "2026-08-21", "event": "run_failed"}` | «run_day.py ha restituito 2» |
+
+**La lettura, e perché è necessaria.** La Stagione 0 è **chiusa al
+18/08/2026** (voce TL-006); il RUN2 **non era iniziato** — la sua
+autorizzazione al primo giorno è la voce TL-011, del 21/08, e fissa il primo
+giorno al 22/08. Il 19, il 20 e il 21 agosto **non appartengono a nessuna
+stagione**: sono giorni di cantiere. I due `skipped_day` marcano quindi
+l'assenza di verbali di una stagione che non stava correndo, e il `run_failed`
+registra un rito che si è fermato alla guardia del freeze — correttamente, e su
+un manifest che non era il suo (DIAGNOSI_G1, verdetto e reperto A).
+
+**La conseguenza dichiarata.** Le soglie di allarme operativo del **§7.2** del
+PREREG del RUN2 — «> 4 `skipped_day` totali» oppure «> 2 consecutivi» — si
+contano **dal primo giorno di stagione**, cioè dal 2026-08-22. Le tre righe qui
+sopra **non entrano in quel conteggio**. Al 21/08 il conteggio della stagione è
+quindi **zero su entrambe le soglie**, e non due su due come una lettura
+ingenua del registro suggerirebbe.
+
+**Perché l'annotazione sta qui e non nel registro operativo.** Il registro è
+append-only con hash-chain e write-once per (giorno, evento): riscrivere una
+riga romperebbe la catena da quel punto in poi, e aggiungere un campo
+`pre_stagione` a righe già scritte e già incatenate è la stessa cosa. Il
+registro conserva **cosa è successo**; questo log conserva **come va letto**.
+Sono due mestieri diversi, e la separazione è deliberata (`CLAUDE.md` §9).
+
+Se in futuro lo schema del registro operativo prevedesse una marcatura
+append-only dei record fuori stagione — una riga nuova che qualifica una riga
+vecchia, mai una modifica — quella marcatura potrà essere aggiunta e dovrà
+citare questa voce. Non esiste oggi, e inventarla in questo rito avrebbe
+significato cambiare uno schema di ledger per un problema di lettura.
+
+---
+
+## TL-013 — Il `freeze_id` di `trader_v0` non è più riproducibile, e non si corregge
+
+- **Data**: 2026-08-21
+- **Stato**: attiva
+- **Decisa da**: l'owner (Sanji), 21/08/2026, per delega esplicita nel prompt
+  del rito `FIX_G1`.
+- **Supera**: nulla. Registra un **reperto** accertato dalla DIAGNOSI_G1 e
+  decide, esplicitamente, di **non** ripararlo.
+
+**Il fatto.** `manifests/trader_v0_freeze_manifest.json` — il pin della
+Stagione 0 — dichiara `freeze_id =
+f37b8c2c98351ed93f1a841d6b6e58faba2d1023e5883b3c8ff6da3ba37535e1`, e sotto il
+contratto `FreezeManifest` corrente il ricalcolo sul contenuto dà un valore
+**diverso**. Diverso, per giunta, in momenti diversi: `5ec416a7…` il 20/08 alle
+01:33Z, `753f3cbd…` lo stesso giorno alle 05:00Z, `46c11951…` la notte del
+21/08. Il valore **dichiarato** non si è mai mosso.
+
+**La causa, accertata e non congetturata.** Non è una manomissione: il file è
+**identico al blob committato** (`git diff HEAD --` sul suo percorso è vuoto) e
+il suo timbro `.ots`, che certifica quei byte, non è in discussione. La causa è
+che `freeze_id` si calcola su `canonical_payload()`, cioè su **tutti** i campi
+del contratto corrente, e **otto campi** aggiunti al contratto dai riti del
+19-20/08 (commit `4196958`, `a924da0`, `474a1b5`) non esistono in quel file e
+vi entrano con i loro **default**: `pin_commit`, `season_budget_usd`,
+`season_expected_days`, `thinking_declared`, `price_per_mtok_input`,
+`price_per_mtok_output`, `price_per_mtok_cache_write_5m`,
+`price_per_mtok_cache_read`. Ogni commit che tocca il contratto sposta quindi
+il ricalcolo di un manifest vecchio — ed è esattamente il motivo per cui il
+valore si è mosso tre volte in due giorni.
+
+**La decisione: nessuna correzione.** Il file non si tocca, il `freeze_id`
+dichiarato non si riscrive, il timbro non si rifà. Le ragioni, in ordine:
+
+1. **la validità storica è intatta.** Il timbro OTS certifica i byte, i byte
+   non sono cambiati, e i 18 verbali della Stagione 0 girarono sotto il
+   contratto di allora, per il quale quel `freeze_id` era riproducibile;
+2. **riscrivere il valore sarebbe la manomissione** che il messaggio d'errore
+   teme: allineerebbe il file al contratto di oggi e romperebbe la
+   corrispondenza con il timbro;
+3. la Stagione 0 è **chiusa** (TL-006) e nessun rito futuro deve caricare quel
+   manifest per girare.
+
+**Cosa questo reperto insegna, e che vale per il RUN2.** Il `freeze_id` di un
+manifest è riproducibile **solo sotto il contratto con cui fu scritto**. Il pin
+del RUN2 vive quindi sotto la stessa spada: finché la stagione corre, il
+contratto `FreezeManifest` **non si tocca**, perché un campo aggiunto — anche
+con un default innocuo, anche senza modificare un byte del manifest — sposta il
+ricalcolo, e la guardia del freeze rifiuta di far girare la giornata. Il test
+`tests/test_dry_run_notturno.py::test_il_manifest_pinnato_del_run2_e_raggiungibile_e_verde`
+esiste per rendere quel rosso visibile **in suite** invece che a mezzanotte.
+
+---
+
+## TL-014 — Un preflight che non percorre la strada del rito, mente
+
+- **Data**: 2026-08-21
+- **Stato**: attiva
+- **Decisa da**: l'owner (Sanji), 21/08/2026, per delega esplicita nel prompt
+  del rito `FIX_G1`.
+- **Supera**: la lettura implicita per cui un controllo non eseguito potesse
+  essere riportato come un controllo superato.
+
+**La dottrina, in una riga**: *un preflight che non percorre la strada del
+rito, mente*. Il **PASS finto è vietato**: un controllo che non si può eseguire
+è **FAIL** o **AVVISO**, mai PASS, e un controllo che verifica qualcosa di
+adiacente a ciò che il rito farà non è quel controllo.
+
+**Il difetto misurato che la impone.** Il 2026-08-20, due volte nella stessa
+giornata, il controllo del mattino ha concluso **exit 0** e il suo preflight ha
+risposto **PRONTO PER STANOTTE: SI** con otto righe verdi, mentre il manifest
+che la notte avrebbe caricato era **già irricevibile** — la stessa divergenza
+del `freeze_id` di TL-013, già scritta nel suo stesso log alle 01:33Z e alle
+05:00Z. La notte seguente il rito è uscito **4** su quella identica causa. Le
+due forme del difetto:
+
+- la precondizione «FreezeManifest presente coi due `.ots`» verificava che i
+  file **esistessero**, non che il manifest **si caricasse**. Un file che c'è e
+  non si carica passava;
+- fuori stagione «nessuna stagione attiva» era uno stato **normale**, e un
+  manifest che non si carica veniva letto come «nessuna stagione» invece che
+  come un guasto: il sistema **sapeva** e taceva.
+
+**Cosa la dottrina impone al codice** (attuato dal rito `FIX_G1` del 21/08):
+
+1. il preflight **compone ed esegue il comando notturno effettivo** —
+   `scripts/run_day.py --dry-run --live` con **lo stesso** manifest e **lo
+   stesso** ledger della notte — e lo percorre fino al punto immediatamente
+   precedente l'istanziazione del client. Le cinque guardie attraversate sono
+   quelle vere, non una loro imitazione;
+2. un controllo che **solleva** o che non parte vale **NO**, mai silenzio: il
+   ramo d'eccezione del preflight nel controllo del mattino non lascia più
+   l'esito indeterminato;
+3. un manifest designato per il rito e **non caricabile** (assente, illeggibile
+   o con `freeze_id` divergente) è sempre un **allarme**. Resta muto — e deve
+   restare muto — il manifest **sano ma non ancora pinnato**: quello è il
+   cantiere fermo, non un guasto, e un allarme che suona ogni mattina è il modo
+   più efficace di disattivare un allarme senza spegnerlo;
+4. l'esito ≠ 0 del rito notturno è un **allarme**, letto dal **registro
+   operativo** del Lab — append-only, con hash-chain — e non dal
+   `LastTaskResult` del Task Scheduler, che è un solo numero che la passata
+   successiva sovrascrive.
+
+**Il principio generale, oltre il preflight.** Un controllo esiste per
+anticipare un rifiuto, non per riprodurlo. «Tanto il runner lo rifiuta da sé» è
+vero e irrilevante: il rifiuto del runner arriva a mezzanotte, quando non c'è
+più tempo per ripararlo, e il controllo del mattino esiste per anticiparlo di
+diciassette ore. **Un guasto che il sistema conosce e non dice è peggio di un
+guasto che non conosce**, perché insegna a fidarsi di una tabella verde.

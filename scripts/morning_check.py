@@ -71,7 +71,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from arena.config import DEFAULT_MANIFEST_PATH, ManifestError, load_pinned_manifest
 from arena.daily_ritual import DEFAULT_LEDGER_PATH, DEFAULT_OPS_PATH, RitualLog
 from contracts.freeze import FreezeManifest
-from ledger.ops_ledger import OpsLedger, recorded_days
+from ledger.ops_ledger import OpsEvent, OpsKey, OpsLedger, recorded_days
 from ledger.spend import (
     check_prorata_alarm,
     check_season_terms,
@@ -210,9 +210,29 @@ def default_alert(message: str, *, runner=subprocess.run) -> bool:
         return False
 
 
-def default_preflight_check(*, repo_root: Path, env: dict[str, str], ledger_path: Path, ops_path: Path) -> PreflightResult:
-    """Wrapper reale su `scripts.preflight.run_preflight` (sottoprocessi veri)."""
-    return run_preflight(repo_root=repo_root, env=env, ledger_path=ledger_path, ops_path=ops_path)
+def default_preflight_check(
+    *,
+    repo_root: Path,
+    env: dict[str, str],
+    ledger_path: Path,
+    ops_path: Path,
+    manifest_path: Path,
+) -> PreflightResult:
+    """Wrapper reale su `scripts.preflight.run_preflight` (sottoprocessi veri).
+
+    `manifest_path` e `ledger_path` sono quelli con cui gira il **rito**, non
+    quelli di default del preflight: e' l'unico modo perche' la precondizione
+    (i) componga il comando della notte vera. Un preflight che verifica un
+    manifest diverso da quello che la notte carichera' risponde alla domanda
+    sbagliata, e la risposta giusta alla domanda sbagliata e' un PASS finto.
+    """
+    return run_preflight(
+        repo_root=repo_root,
+        env=env,
+        ledger_path=ledger_path,
+        ops_path=ops_path,
+        manifest_path=manifest_path,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,10 +362,27 @@ def run_morning_check(
     preflight_detail = ""
     try:
         preflight_result = preflight(
-            repo_root=repo_root, env=environment, ledger_path=ledger_path, ops_path=ops_path
+            repo_root=repo_root,
+            env=environment,
+            ledger_path=ledger_path,
+            ops_path=ops_path,
+            manifest_path=Path(manifest_path),
         )
-    except Exception as exc:  # noqa: BLE001 - un preflight fallito non blocca il controllo
+    except Exception as exc:  # noqa: BLE001 - non solleva: diventa un NO dichiarato
+        # Un preflight che non gira NON e' un preflight verde. Prima questo
+        # ramo lasciava `preflight_ready` a None, e un controllo non eseguito
+        # spariva: nessun allarme, exit 0, e la tabella del mattino taceva la
+        # sola cosa che contava. Un controllo non eseguibile e' un NO
+        # (DIAGNOSI_G1, dottrina del PASS finto).
+        preflight_ready = False
+        preflight_detail = (
+            f"preflight non eseguibile — {type(exc).__name__}: {exc}"
+        )
         log.write(f"preflight: eccezione nell'eseguirlo — {type(exc).__name__}: {exc}")
+        log.write(
+            "STOP: un preflight che non gira non e' un PASS — "
+            "PRONTO PER STANOTTE: NO"
+        )
     else:
         log.block("preflight per stanotte", format_table(preflight_result))
         preflight_ready = preflight_result.ready
@@ -399,8 +436,36 @@ def run_morning_check(
         )
     if exit_code != EXIT_OK:
         reasons.append(f"exit {exit_code} — {EXIT_MEANING[exit_code]}: {detail}")
+    if manifest is None:
+        # Il manifest designato per il rito non si carica: assente, illeggibile
+        # o con `freeze_id` divergente. NON e' la stessa cosa di un manifest
+        # sano non ancora pinnato — quello e' il cantiere fermo, e resta muto.
+        # Questo e' un guasto, e un guasto muto e' quello che e' successo: il
+        # 20/08 il manifest era gia' irricevibile, il controllo lo scrisse nel
+        # log come «stagione: nessuna» e concluse exit 0 senza allarme; la
+        # notte dopo il rito uscì 4 (DIAGNOSI_G1 §1-bis).
+        reasons.append(
+            f"manifest del rito inutilizzabile ({manifest_path}): {manifest_detail}. "
+            f"Finche' non si carica, il rito notturno NON puo' girare"
+        )
     if preflight_ready is False:
         reasons.append(f"preflight NO per stanotte: {preflight_detail}")
+    for evento, che_cosa in (
+        (OpsEvent.RUN_FAILED, "il rito e' partito e si e' fermato prima dei verbali"),
+        (
+            OpsEvent.FAILED_DECISIONS,
+            "il passo delle decisioni ha esaurito la finestra di retry",
+        ),
+    ):
+        if ops_ledger.has(OpsKey.of(today, evento)):
+            # L'esito della notte si legge dal registro operativo del Lab, non
+            # dal `LastTaskResult` del Task Scheduler: il registro e'
+            # append-only e con hash-chain, lo scheduler tiene un solo numero
+            # che la passata successiva sovrascrive.
+            reasons.append(
+                f"esito del rito di stanotte ≠ 0: '{evento}' nel registro "
+                f"operativo per {today.isoformat()} — {che_cosa}"
+            )
     if budget_ok is False:
         reasons.append(f"ritmo di spesa oltre soglia (D5): {budget_detail}")
 
@@ -545,6 +610,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", default=str(DEFAULT_LEDGER_PATH))
     parser.add_argument("--ops-ledger", default=str(DEFAULT_OPS_PATH))
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
+    # Il default resta quello di `arena/config.py`. Il wrapper
+    # `scripts/morning_check.ps1` passa SEMPRE questo flag esplicitamente, con
+    # lo stesso valore che `scripts/run_daily.ps1` passa al rito: i due
+    # default vanno cambiati insieme, e un controllo che guardasse un manifest
+    # diverso da quello della notte non starebbe controllando la notte.
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST_PATH))
     parser.add_argument(
         "--force-alarm",

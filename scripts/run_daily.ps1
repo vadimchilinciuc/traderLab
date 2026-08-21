@@ -28,7 +28,19 @@ param(
     # schedulato deve girare all'ora configurata, non a un'ora qualsiasi.
     [switch]$IgnoreConfiguredHour,
 
-    [string]$Ledger = "data/ledger/season0.jsonl",
+    # Ledger dei verbali del SEGMENTO in corso. Il RUN2 gira su
+    # 'claude-opus-5': un suo verbale in coda a season0.jsonl, che porta i 18
+    # verbali di 'claude-fable-5', mescolerebbe due model string nella stessa
+    # catena append-only (CLAUDE.md sez. 9 e 10).
+    [string]$Ledger = "data/ledger/season0_run2.jsonl",
+
+    # Manifest pinnato della stagione. Va passato ESPLICITAMENTE: senza questo
+    # flag run_day.py cade sul default di arena/config.py, che punta ancora al
+    # manifest della Stagione 0 - ed e' la ragione per cui la notte del
+    # 2026-08-21 il rito e' uscito 4 senza poter raggiungere il pin del RUN2
+    # (DIAGNOSI_G1, reperto A).
+    [string]$Manifest = "manifests/trader_v1_run2_freeze_manifest.json",
+
     [string]$OpsLedger = "data/ledger/ops.jsonl",
     [string]$LogDir = "data/logs"
 )
@@ -85,6 +97,7 @@ if ($Live) {
 $arguments = @(
     "run", "python", "scripts/run_daily.py",
     "--ledger", $Ledger,
+    "--manifest", $Manifest,
     "--ops-ledger", $OpsLedger,
     "--log-dir", $LogDir
 )

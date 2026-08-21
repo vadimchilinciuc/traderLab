@@ -26,9 +26,11 @@ from scripts.preflight import (
     check_ledger_chains,
     check_live_flag,
     check_network_reachable,
+    check_nightly_command,
     check_task_registration,
     check_user_session,
     format_table,
+    nightly_decisions_command,
     query_scheduled_task,
     run_preflight,
 )
@@ -382,6 +384,136 @@ def test_sessione_utente_avvisa_se_logon_type_non_interactive():
 
 
 # --------------------------------------------------------------------------
+# (i) il comando notturno percorso fino al punto pre-client
+# --------------------------------------------------------------------------
+
+
+def test_il_comando_notturno_e_quello_della_notte_meno_il_client(tmp_path):
+    """La forma del comando: stesso manifest, stesso ledger, piu' --dry-run.
+
+    Se questa lista divergesse da quella che `arena/daily_ritual.py` compone
+    per la notte, il preflight tornerebbe a verificare qualcosa che somiglia
+    al rito invece del rito — che e' esattamente il difetto misurato il
+    20/08/2026.
+    """
+    comando = nightly_decisions_command(
+        python_executable="python",
+        repo_root=tmp_path,
+        manifest_path=Path("manifests/pinnato.json"),
+        ledger_path=Path("data/ledger/season0_run2.jsonl"),
+    )
+
+    assert comando[0] == "python"
+    assert comando[1].endswith("run_day.py")
+    assert "--dry-run" in comando
+    assert "--live" in comando
+    # `str(Path(...))` e non la stringa letterale: su Windows il separatore e'
+    # `\`, e un test che pretendesse `/` proverebbe la piattaforma, non il rito.
+    assert comando[comando.index("--manifest") + 1] == str(Path("manifests/pinnato.json"))
+    assert comando[comando.index("--ledger") + 1] == str(
+        Path("data/ledger/season0_run2.jsonl")
+    )
+    # Lo snapshot di stanotte non esiste ancora: il dry run si ferma prima di
+    # leggerlo, e chiederlo sarebbe una precondizione inventata.
+    assert "--snapshot-id" not in comando
+
+
+def test_il_dry_run_riuscito_riporta_i_valori_che_lo_giustificano(tmp_path):
+    """Un PASS senza i valori che lo sostengono non si distingue da un PASS finto."""
+    stdout_del_dry_run = (
+        "modello pinnato : claude-opus-5\n"
+        "freeze_id       : 2136b199\n"
+        "termini stagione: sei termini presenti\n"
+        "spesa stagione  : $0,00 su $89,90\n"
+    )
+    runner = FakeRunner(Completed(0, stdout_del_dry_run, ""))
+
+    esito = check_nightly_command(
+        python_executable="python",
+        repo_root=tmp_path,
+        base_env={"ANTHROPIC_API_KEY": "sk-ant-x"},
+        manifest_path=Path("manifests/pinnato.json"),
+        ledger_path=Path("data/ledger/season0_run2.jsonl"),
+        runner=runner,
+    )
+
+    assert esito.ok is True
+    assert "claude-opus-5" in esito.detail
+    assert "2136b199" in esito.detail
+    assert str(Path("manifests/pinnato.json")) in esito.detail
+
+
+def test_il_dry_run_accende_il_live_solo_nel_sottoprocesso_e_spegne_la_rete(tmp_path):
+    """CLAUDE.md §7, stessa disciplina della sonda di rete.
+
+    `TRADERLAB_ALLOW_LIVE_API` entra solo nell'ambiente del sotto-processo (di
+    mattina non c'e', e senza iniezione la prima guardia rifiuterebbe per una
+    ragione che di notte non esiste: un FAIL falso).
+    `TRADERLAB_ALLOW_NETWORK` viene tolta, perche' il passo 2/2 della notte
+    gira con la rete spenta.
+    """
+    ambiente = {"ANTHROPIC_API_KEY": "sk-ant-x", "TRADERLAB_ALLOW_NETWORK": "1"}
+    runner = FakeRunner(Completed(0, "modello pinnato : claude-opus-5\n", ""))
+
+    check_nightly_command(
+        python_executable="python",
+        repo_root=tmp_path,
+        base_env=ambiente,
+        manifest_path=Path("m.json"),
+        ledger_path=Path("l.jsonl"),
+        runner=runner,
+    )
+
+    _, env_usato, _ = runner.calls[0]
+    assert env_usato["TRADERLAB_ALLOW_LIVE_API"] == "1"
+    assert "TRADERLAB_ALLOW_NETWORK" not in env_usato
+    # E l'ambiente del processo di preflight non e' stato toccato.
+    assert "TRADERLAB_ALLOW_LIVE_API" not in ambiente
+
+
+def test_il_dry_run_che_rifiuta_e_un_FAIL_col_motivo_del_rito(tmp_path):
+    """Il rifiuto della notte del 21/08, anticipato di diciassette ore."""
+    motivo = (
+        "ERRORE: manifest non utilizzabile - freeze_id divergente in "
+        "manifests/trader_v0_freeze_manifest.json"
+    )
+    runner = FakeRunner(Completed(2, "", motivo))
+
+    esito = check_nightly_command(
+        python_executable="python",
+        repo_root=tmp_path,
+        base_env={},
+        manifest_path=Path("manifests/trader_v0_freeze_manifest.json"),
+        ledger_path=Path("data/ledger/season0_run2.jsonl"),
+        runner=runner,
+    )
+
+    assert esito.ok is False
+    assert "exit 2" in esito.detail
+    assert "freeze_id divergente" in esito.detail
+
+
+def test_un_dry_run_che_non_parte_e_un_FAIL_mai_un_PASS(tmp_path):
+    """La dottrina: un controllo non eseguibile e' FAIL, mai PASS."""
+
+    class RunnerCheEsplode:
+        def __call__(self, *a, **k):
+            raise OSError("interprete assente")
+
+    esito = check_nightly_command(
+        python_executable="python",
+        repo_root=tmp_path,
+        base_env={},
+        manifest_path=Path("m.json"),
+        ledger_path=Path("l.jsonl"),
+        runner=RunnerCheEsplode(),
+    )
+
+    assert esito.ok is False
+    assert "non eseguibile" in esito.detail
+
+
+# --------------------------------------------------------------------------
 # Orchestratore: run_preflight + format_table
 # --------------------------------------------------------------------------
 
@@ -402,7 +534,12 @@ def test_run_preflight_tutto_verde_e_pronto(tmp_path):
         '"LastRunTime":"15/08/2026 02:00:00","LastTaskResult":"0"}'
     )
     task_runner = FakeRunner(Completed(0, task_payload, ""))
-    process_runner = FakeRunner(Completed(0, "OK universe=2", ""))
+    # Due sottoprocessi, in quest'ordine: la sonda di rete della (c) e il dry
+    # run del comando notturno della (i).
+    process_runner = FakeRunner(
+        Completed(0, "OK universe=2", ""),
+        Completed(0, """manifest        : manifests/trader_v1_run2_freeze_manifest.json\nmodello pinnato : claude-opus-5\nfreeze_id       : 2136b199\ntermini stagione: sei termini presenti\nspesa stagione  : $0,00 su $89,90\ndry-run         : cinque guardie passate\n""", ""),
+    )
 
     result = run_preflight(
         repo_root=repo_root,

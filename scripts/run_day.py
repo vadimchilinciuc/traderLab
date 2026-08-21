@@ -22,6 +22,15 @@ RUN2 §A.2). Prima di qualunque chiamata al modello questo script:
    soglia dura dichiarata in `ledger/spend.py` (D5).
 
 Ognuno dei cinque e' un rifiuto pulito con exit code 2, mai un ripiego.
+
+Con `--dry-run` (che richiede `--live`) lo script percorre gli stessi cinque
+controlli e si ferma **un passo prima** dell'istanziazione del client: nessun
+client, nessuna chiamata al modello, nessuna riga scritta. Serve al preflight
+del controllo mattutino, che deve verificare la notte percorrendo la strada
+della notte e non una sua imitazione — il 20/08/2026 il preflight rispose
+PRONTO: SI mentre il manifest che la notte avrebbe caricato era gia' rifiutato
+dalla prima guardia, perche' guardava la PRESENZA dei file invece di provare a
+caricarli (DIAGNOSI_G1 §1-bis).
 """
 
 from __future__ import annotations
@@ -58,9 +67,23 @@ from toolserver.toollog import ToolCallLog
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--snapshot-id", required=True)
+    parser.add_argument("--snapshot-id", default=None)
     parser.add_argument("--run-id", default=None)
-    parser.add_argument("--ledger", default="data/ledger/season0.jsonl")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "percorre le cinque guardie di --live e si ferma un passo prima "
+            "di istanziare il client: nessuna chiamata, nessuna scrittura. "
+            "Richiede --live, perche' e' la strada della notte a essere "
+            "verificata, e non richiede --snapshot-id, perche' si ferma prima "
+            "di leggerlo."
+        ),
+    )
+    # Il ledger del segmento in corso, non quello della Stagione 0: un
+    # verbale del RUN2 in coda a `season0.jsonl` mescolerebbe due model string
+    # nella stessa catena append-only (CLAUDE.md §9 e §10).
+    parser.add_argument("--ledger", default="data/ledger/season0_run2.jsonl")
     parser.add_argument("--live", action="store_true", help="usa l'API reale")
     parser.add_argument(
         "--manifest",
@@ -80,6 +103,16 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+
+    # `--snapshot-id` resta obbligatorio per una giornata vera: e' solo il dry
+    # run a fermarsi prima di leggerlo. E il dry run senza `--live` non
+    # verificherebbe niente — le cinque guardie vivono nel ramo live.
+    if args.dry_run and not args.live:
+        parser.error(
+            "--dry-run verifica la strada della notte, che e' --live: si usano insieme"
+        )
+    if not args.dry_run and not args.snapshot_id:
+        parser.error("--snapshot-id e' obbligatorio senza --dry-run")
 
     run_id = args.run_id or datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     paths = ToolServerConfig()
@@ -150,6 +183,17 @@ def main() -> int:
         print(f"freeze_id       : {manifest.freeze_id}")
         print(f"termini stagione: {termini.detail}")
         print(f"spesa stagione  : {verdetto.detail}")
+
+        if args.dry_run:
+            # Qui, e non una riga piu' in la'. Sotto comincia la `factory` che
+            # costruisce `AnthropicTraderClient`: fermarsi dopo di essa
+            # renderebbe il dry run una chiamata al modello, e fermarsi prima
+            # dei cinque controlli lo renderebbe un PASS finto.
+            print(
+                "dry-run         : cinque guardie passate, nessun client "
+                "istanziato, nessuna chiamata, nessuna riga scritta"
+            )
+            return 0
 
         def factory(replica_id: str):
             return AnthropicTraderClient(manifest, budget=budget)

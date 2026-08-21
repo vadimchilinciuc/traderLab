@@ -274,6 +274,54 @@ def test_giornata_completa_lancia_i_due_processi_nell_ordine(percorsi):
     assert SNAPSHOT_ID in runner.commands[1]
 
 
+def test_il_comando_delle_decisioni_porta_manifest_e_ledger(percorsi):
+    """Il guasto di cablaggio del 2026-08-21, in forma di test.
+
+    Il rito componeva il comando di `run_day.py` con `--snapshot-id` e
+    `--ledger` e **mai** `--manifest`: `run_day.py` cadeva quindi sul default
+    di `arena/config.py`, che punta al manifest della Stagione 0. Il manifest
+    pinnato del RUN2 era pronto e il rito non poteva raggiungerlo in nessun
+    caso — la notte del 21/08 il rito uscì 4 senza mai vederlo (DIAGNOSI_G1,
+    reperto A). Il test guarda il comando, non l'esito: e' il comando che era
+    sbagliato, e un rito che uscisse 0 con il manifest sbagliato sarebbe
+    peggio, non meglio.
+    """
+    runner = FakeRunner(
+        Completed(0, _build_output(), ""),
+        Completed(0, "decisioni       : 6\n", ""),
+    )
+    manifest = percorsi["repo_root"] / "manifests" / "trader_v1_run2_freeze_manifest.json"
+    _rito(percorsi, runner, manifest_path=manifest)
+
+    decisioni = runner.commands[1]
+    assert "--manifest" in decisioni
+    assert decisioni[decisioni.index("--manifest") + 1] == str(manifest)
+    assert "--ledger" in decisioni
+    assert decisioni[decisioni.index("--ledger") + 1] == str(percorsi["ledger_path"])
+    # E lo snapshot NON lo tocca: il manifest e' l'unica cosa aggiunta.
+    assert decisioni[0] == "python"
+
+
+def test_il_log_dichiara_manifest_e_ledger_prima_di_qualunque_passo(percorsi):
+    """Quale manifest il rito carica e' un dato, non un dettaglio implementativo.
+
+    La notte del 21/08 il log non lo diceva: quale manifest fosse stato letto
+    si e' potuto stabilire solo dal testo del messaggio d'errore, cioe' solo
+    perche' il rito e' fallito. Se fosse riuscito sul manifest sbagliato, il
+    log non avrebbe conservato traccia di quale fosse.
+    """
+    runner = FakeRunner(
+        Completed(0, _build_output(), ""),
+        Completed(0, "decisioni       : 6\n", ""),
+    )
+    manifest = percorsi["repo_root"] / "manifests" / "pinnato.json"
+    esito = _rito(percorsi, runner, manifest_path=manifest)
+
+    testo = esito.log_path.read_text(encoding="utf-8")
+    assert f"manifest della stagione         : {manifest}" in testo
+    assert f"ledger dei verbali              : {percorsi['ledger_path']}" in testo
+
+
 def test_la_rete_e_accesa_solo_per_lo_snapshot(percorsi):
     """CLAUDE.md §7: la rete si tocca in un processo separato, non altrove."""
     runner = FakeRunner(

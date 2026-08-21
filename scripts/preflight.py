@@ -18,7 +18,7 @@ delle due notti perse. Questo script quindi non "simula" una lettura di
 `.env` che il rito non fa: legge `.env` solo in via diagnostica, per
 segnalare un disallineamento, e lo dichiara esplicitamente nel dettaglio.
 
-Otto precondizioni, in quest'ordine:
+Nove precondizioni, in quest'ordine:
 
   (a) ANTHROPIC_API_KEY presente e con il formato atteso, nell'ambiente di
       processo — mai il valore, solo presenza e lunghezza.
@@ -38,12 +38,25 @@ Otto precondizioni, in quest'ordine:
   (h) Sessione utente attiva: non verificabile in anticipo — PROMEMORIA, mai
       FAIL (il task gira con LogonType=Interactive: Win+L va bene, il
       logoff no).
+  (i) **Il comando notturno effettivo, percorso fino al punto pre-client**:
+      `run_day.py --dry-run --live` con LO STESSO manifest e LO STESSO ledger
+      della notte. Verifica caricamento del manifest, `freeze_id`, `pin_commit`,
+      i sei termini economici e la spesa cumulata — le cinque guardie, quelle
+      vere — e si ferma un passo prima del client.
+
+La (i) esiste per un difetto misurato. Il 2026-08-20 alle 05:00Z questa stessa
+tabella disse **PRONTO PER STANOTTE: SI** con otto righe verdi, e la notte
+seguente il rito usci' **4**: la (g) verificava che il manifest *esistesse*,
+non che si *caricasse*, e il manifest non si caricava gia' da allora
+(DIAGNOSI_G1 §1-bis). Un preflight che non percorre la strada del rito non
+sta verificando il rito: sta verificando qualcos'altro che gli somiglia.
 
     uv run python scripts/preflight.py
 
 Exit code: 0 se "PRONTO PER STANOTTE: SI", 1 altrimenti. Nessuna scrittura:
-solo lettura e, per (c), una singola chiamata di rete in un sotto-processo
-usa-e-getta.
+solo lettura, per (c) una singola chiamata di rete in un sotto-processo
+usa-e-getta, e per (i) un sotto-processo che si ferma prima di scrivere e
+prima di chiamare il modello.
 """
 
 from __future__ import annotations
@@ -70,6 +83,11 @@ DEFAULT_DOTENV_PATH = Path(".env")
 DEFAULT_DATA_DIR = Path("data")
 MIN_FREE_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
 DEFAULT_NETWORK_TIMEOUT = 20.0
+#: Il dry run legge un manifest, un ledger e una cartella di tool call: e'
+#: I/O locale, non rete. Il margine e' largo perche' un timeout scaduto qui e'
+#: un FAIL, e un FAIL falso insegna a ignorare la tabella tanto quanto un PASS
+#: falso.
+DEFAULT_DRYRUN_TIMEOUT = 120.0
 
 _LIVE_INLINE_RE = re.compile(r"TRADERLAB_ALLOW_LIVE_API\s*=\s*['\"]?1['\"]?")
 _LIVE_SWITCH_RE = re.compile(r"(?<![\w-])-Live\b", re.IGNORECASE)
@@ -430,6 +448,102 @@ def check_user_session(task_info: TaskInfo) -> CheckResult:
 
 
 # --------------------------------------------------------------------------
+# (i) il comando notturno effettivo, fino al punto pre-client
+# --------------------------------------------------------------------------
+
+
+def nightly_decisions_command(
+    *, python_executable: str, repo_root: Path, manifest_path: Path, ledger_path: Path
+) -> list[str]:
+    """Il comando del passo 2/2 della notte, in forma dry.
+
+    Sta qui, in una funzione sola, perche' la tabella del preflight possa
+    STAMPARLO: la strada percorsa dev'essere leggibile nel log, non deducibile
+    da chi conosce i default. Gli unici due elementi che lo distinguono dal
+    comando che `arena/daily_ritual.py` compone per la notte sono `--dry-run`
+    (che lo ferma prima del client) e l'assenza di `--snapshot-id` (che a
+    quel punto non e' ancora stato letto).
+    """
+    return [
+        python_executable,
+        str(repo_root / "scripts" / "run_day.py"),
+        "--dry-run",
+        "--live",
+        "--manifest",
+        str(manifest_path),
+        "--ledger",
+        str(ledger_path),
+    ]
+
+
+def check_nightly_command(
+    *,
+    python_executable: str,
+    repo_root: Path,
+    base_env: Mapping[str, str],
+    manifest_path: Path,
+    ledger_path: Path,
+    timeout: float = DEFAULT_DRYRUN_TIMEOUT,
+    runner=subprocess_runner,
+) -> CheckResult:
+    """Percorre la strada del rito, non una sua imitazione.
+
+    `TRADERLAB_ALLOW_LIVE_API=1` entra SOLO nell'ambiente di questo
+    sotto-processo — stessa disciplina con cui la (c) accende la rete e con
+    cui il rito accende `TRADERLAB_ALLOW_NETWORK` per il solo snapshot
+    (CLAUDE.md §7). Di mattina quella variabile non c'e' nell'ambiente del
+    task del controllo, e senza l'iniezione la prima guardia di `run_day.py`
+    rifiuterebbe per una ragione che di notte non esiste: un FAIL falso.
+    `TRADERLAB_ALLOW_NETWORK` viene invece **tolta**, perche' il passo 2/2
+    della notte gira con la rete spenta e questo deve girare come lui.
+
+    Il rischio di questa iniezione e' nullo per costruzione: `--dry-run`
+    ritorna prima che un client esista (`scripts/run_day.py`), quindi la
+    variabile abilita un ramo che si ferma comunque prima di chiamare
+    qualcuno.
+    """
+    label = "(i) comando notturno percorso fino al punto pre-client"
+    command = nightly_decisions_command(
+        python_executable=python_executable,
+        repo_root=repo_root,
+        manifest_path=manifest_path,
+        ledger_path=ledger_path,
+    )
+    # Forma leggibile per il log: quello che conta e' quale manifest e quale
+    # ledger, non il percorso assoluto dell'interprete.
+    readable = f"run_day.py --dry-run --live --manifest {manifest_path} --ledger {ledger_path}"
+
+    probe_env = dict(base_env)
+    probe_env["TRADERLAB_ALLOW_LIVE_API"] = "1"
+    probe_env.pop("TRADERLAB_ALLOW_NETWORK", None)
+
+    try:
+        result = runner(command, probe_env, cwd=str(repo_root), timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - un dry run che non parte e' un FAIL, mai un PASS
+        return CheckResult(label, False, f"{readable} — non eseguibile: {type(exc).__name__}: {exc}")
+
+    if result.returncode != 0:
+        motivo = ((result.stderr or "") + (result.stdout or "")).strip().splitlines()
+        ultima = motivo[-1] if motivo else "nessun dettaglio"
+        return CheckResult(
+            label, False, f"{readable} — exit {result.returncode}: {ultima}"
+        )
+
+    # Le righe che `run_day.py` stampa dopo le cinque guardie: modello
+    # pinnato, freeze_id, termini, spesa. Vanno nel dettaglio perche' un PASS
+    # senza i valori che lo giustificano e' indistinguibile da un PASS finto.
+    righe = [r.strip() for r in (result.stdout or "").splitlines() if r.strip()]
+    interessanti = [
+        r
+        for r in righe
+        if r.startswith(("modello pinnato", "freeze_id", "termini stagione", "spesa stagione"))
+    ]
+    return CheckResult(
+        label, True, f"{readable} — exit 0. " + " | ".join(interessanti)
+    )
+
+
+# --------------------------------------------------------------------------
 # Orchestratore
 # --------------------------------------------------------------------------
 
@@ -448,10 +562,11 @@ def run_preflight(
     task_name_pattern: str = DEFAULT_TASK_NAME_PATTERN,
     min_free_bytes: int = MIN_FREE_BYTES,
     network_timeout: float = DEFAULT_NETWORK_TIMEOUT,
+    dryrun_timeout: float = DEFAULT_DRYRUN_TIMEOUT,
     process_runner=subprocess_runner,
     task_query_runner=subprocess_runner,
 ) -> PreflightResult:
-    """Esegue le otto precondizioni e ritorna l'esito. Non solleva, non scrive."""
+    """Esegue le nove precondizioni e ritorna l'esito. Non solleva, non scrive."""
 
     def _abs(path: Path) -> Path:
         return path if path.is_absolute() else repo_root / path
@@ -473,6 +588,15 @@ def run_preflight(
         check_ledger_chains(_abs(ledger_path), _abs(ops_path)),
         check_freeze_manifest(_abs(manifest_path), _abs(prereg_path)),
         check_user_session(task_info),
+        check_nightly_command(
+            python_executable=python_executable,
+            repo_root=repo_root,
+            base_env=env,
+            manifest_path=_abs(manifest_path),
+            ledger_path=_abs(ledger_path),
+            timeout=dryrun_timeout,
+            runner=process_runner,
+        ),
     ]
 
     failure = next((c for c in checks if c.ok is False), None)
@@ -519,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task-name-pattern", default=DEFAULT_TASK_NAME_PATTERN)
     parser.add_argument("--min-free-gb", type=float, default=1.0)
     parser.add_argument("--network-timeout", type=float, default=DEFAULT_NETWORK_TIMEOUT)
+    parser.add_argument("--dryrun-timeout", type=float, default=DEFAULT_DRYRUN_TIMEOUT)
     args = parser.parse_args(argv)
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -534,6 +659,7 @@ def main(argv: list[str] | None = None) -> int:
         task_name_pattern=args.task_name_pattern,
         min_free_bytes=int(args.min_free_gb * 1024**3),
         network_timeout=args.network_timeout,
+        dryrun_timeout=args.dryrun_timeout,
     )
     print(format_table(result))
     return 0 if result.ready else 1

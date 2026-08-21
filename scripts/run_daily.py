@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from arena.config import DEFAULT_MANIFEST_PATH
 from arena.daily_ritual import (
     DEFAULT_LEDGER_PATH,
     DEFAULT_LOG_DIR,
@@ -27,6 +28,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="usa l'API reale")
     parser.add_argument("--ledger", default=str(DEFAULT_LEDGER_PATH))
+    parser.add_argument(
+        "--manifest",
+        default=str(DEFAULT_MANIFEST_PATH),
+        help=(
+            "percorso del FreezeManifest COMMITTATO della stagione, passato "
+            "tal quale a scripts/run_day.py. Il rito non lo indovina: se non "
+            "lo si dichiara, vale il default di arena/config.py"
+        ),
+    )
     parser.add_argument("--ops-ledger", default=str(DEFAULT_OPS_PATH))
     parser.add_argument("--log-dir", default=str(DEFAULT_LOG_DIR))
     parser.add_argument(
@@ -47,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         python_executable=sys.executable,
         live=args.live,
         ledger_path=Path(args.ledger),
+        manifest_path=Path(args.manifest),
         ops_path=Path(args.ops_ledger),
         log_dir=Path(args.log_dir),
         require_configured_hour=args.require_configured_hour,

@@ -23,7 +23,13 @@
 
 [CmdletBinding()]
 param(
-    [string]$Ledger = "data/ledger/season0.jsonl",
+    # Gli stessi due percorsi con cui gira il rito notturno, e per la stessa
+    # ragione: un controllo che guarda un ledger e un manifest diversi da
+    # quelli della notte non sta controllando la notte. I default qui e in
+    # scripts/run_daily.ps1 vanno cambiati INSIEME.
+    [string]$Ledger = "data/ledger/season0_run2.jsonl",
+    [string]$Manifest = "manifests/trader_v1_run2_freeze_manifest.json",
+
     [string]$OpsLedger = "data/ledger/ops.jsonl",
     [string]$LogDir = "data/logs"
 )
@@ -88,6 +94,7 @@ if ($null -eq $uv) {
 $arguments = @(
     "run", "python", "scripts/morning_check.py",
     "--ledger", $Ledger,
+    "--manifest", $Manifest,
     "--ops-ledger", $OpsLedger,
     "--log-dir", $LogDir
 )
