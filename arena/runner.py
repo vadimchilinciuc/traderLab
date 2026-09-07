@@ -32,8 +32,13 @@ from arena.verbale import (
     is_true_malformed,
     parse_verbale,
 )
-from ledger.telemetry import BehavioralTelemetry, DailyDispersion, daily_dispersion
-from ledger.trader_ledger import LedgerKey, TraderLedger
+from ledger.telemetry import (
+    BehavioralTelemetry,
+    DailyDispersion,
+    daily_dispersion,
+    undefined_dispersion,
+)
+from ledger.trader_ledger import DuplicateEntry, LedgerKey, TraderLedger
 from toolserver.registry import ToolRegistry
 from toolserver.store import SnapshotStore
 from toolserver.toollog import LLM_COMPLETE_TOOL, ToolCallLog
@@ -80,6 +85,10 @@ class DailyRunResult:
     telemetry: BehavioralTelemetry | None = None
     # {replica_id: {asset: sha256 dell'input inviato}}
     request_fingerprints: dict[str, dict[str, str]] = field(default_factory=dict)
+    # (replica_id, asset) che questa passata NON ha rieseguito perché la chiave
+    # era già nel ledger. Vuoto in una giornata che parte e finisce una volta
+    # sola; non vuoto solo quando il rito ripete un passo interrotto.
+    resumed_keys: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def decisions(self) -> list[DecisionRecord]:
@@ -114,6 +123,11 @@ class DailyRunResult:
         return sum(
             1 for o in self.outcomes if o.malformed_reason is MalformedReason.TRUNCATED
         )
+
+    @property
+    def is_resumed(self) -> bool:
+        """Vero se la passata ha trovato chiavi già scritte e le ha saltate."""
+        return bool(self.resumed_keys)
 
     def by_replica(self) -> dict[str, dict[str, DecisionRecord]]:
         out: dict[str, dict[str, DecisionRecord]] = {}
@@ -189,10 +203,33 @@ class DailyRunner:
         )
 
         for replica_id in self._config.replica_ids:
+            assets = sorted(snapshot.universe)
+            # Il write-once è del ledger (CLAUDE.md §9) e non si aggira: una
+            # chiave già scritta non si riscrive. Ma ripartire da capo su di
+            # essa fa morire l'intera passata su `DuplicateEntry`, e le chiavi
+            # ancora mancanti della giornata non verrebbero scritte mai. La
+            # ripetizione riprende quindi da dove il passo interrotto si era
+            # fermato: salta ciò che c'è, rifà solo ciò che manca.
+            gia_scritte = [
+                asset
+                for asset in assets
+                if self._ledger.has(LedgerKey.of(snapshot.asof_utc, replica_id, asset))
+            ]
+            result.resumed_keys.extend((replica_id, a) for a in gia_scritte)
+            mancanti = [a for a in assets if a not in gia_scritte]
+            if not mancanti:
+                continue
+
             # Isolamento: client, stato e messaggi sono nuovi per ogni replica.
             client = self._client_factory(replica_id)
             state = PortfolioState(allowed_assets=frozenset(snapshot.universe))
-            for asset in sorted(snapshot.universe):
+            if gia_scritte:
+                self._resume_state(
+                    day=LedgerKey.of(snapshot.asof_utc, replica_id, assets[0]).day,
+                    replica_id=replica_id,
+                    state=state,
+                )
+            for asset in mancanti:
                 outcome = self._run_one(
                     snapshot=snapshot,
                     asset=asset,
@@ -203,10 +240,43 @@ class DailyRunner:
                     run_id=run_id,
                     result=result,
                 )
+                if outcome is None:
+                    # La chiave è comparsa fra il controllo e la scrittura.
+                    # Resta «già fatto», non un errore che ferma le altre.
+                    result.resumed_keys.append((replica_id, asset))
+                    continue
                 result.outcomes.append(outcome)
 
-        result.dispersion = daily_dispersion(result.by_replica())
+        if result.resumed_keys:
+            # Le decisioni saltate stanno nel ledger, non in questo risultato:
+            # una dispersione calcolata sul solo sottoinsieme rieseguito
+            # descriverebbe meno repliche di quante la giornata ne ha, senza
+            # dirlo. Non definita, mai uno zero finto (§A.4).
+            result.dispersion = undefined_dispersion(len(result.by_replica()))
+        else:
+            result.dispersion = daily_dispersion(result.by_replica())
         return result
+
+    def _resume_state(self, *, day: str, replica_id: str, state: PortfolioState) -> int:
+        """Rimette nello stato di portafoglio le chiavi già scritte del giorno.
+
+        Una ripetizione che ripartisse con lo stato vuoto lascerebbe il Risk
+        Officer cieco sull'esposizione già registrata dalla passata
+        interrotta: il cap lordo per replica-giornata è un guardrail di codice
+        (CLAUDE.md §2) e non può dipendere da quante volte il passo è stato
+        ripetuto. Si leggono le sole righe di (giorno, replica).
+        """
+        rimesse = 0
+        for entry in self._ledger.read_all():
+            key = entry["key"]
+            if key["day"] != day or key["replica_id"] != replica_id:
+                continue
+            verdict = entry.get("verdict") or {}
+            if verdict.get("outcome") == RiskOutcome.REJECTED.value:
+                continue
+            state.register(key["asset"], float(verdict.get("size_fraction_out", 0.0)))
+            rimesse += 1
+        return rimesse
 
     # -- una decisione -----------------------------------------------------
 
@@ -221,7 +291,8 @@ class DailyRunner:
         telemetry: BehavioralTelemetry,
         run_id: str,
         result: DailyRunResult,
-    ) -> AssetOutcome:
+    ) -> AssetOutcome | None:
+        """Una decisione. `None` se la chiave risultava già scritta."""
         parsed: ParsedVerbale | None = None
         attempts = 0
         for attempt in range(self._config.malformed_retries + 1):
@@ -246,14 +317,17 @@ class DailyRunner:
         if not parsed.ok:
             if parsed.reason is MalformedReason.MODEL_REFUSAL:
                 verdict = RiskOfficer.reject_refusal(asset, parsed.detail)
-                telemetry.observe_refusal(replica_id, verdict)
+                observe = telemetry.observe_refusal
             elif parsed.reason is MalformedReason.TRUNCATED:
                 verdict = RiskOfficer.reject_truncated(asset, parsed.detail)
-                telemetry.observe_truncated(replica_id, verdict)
+                observe = telemetry.observe_truncated
             else:
                 verdict = RiskOfficer.reject_malformed(asset, parsed.detail)
-                telemetry.observe_malformed(replica_id, verdict)
-            self._write(
+                observe = telemetry.observe_malformed
+            # La telemetria conta dopo la scrittura, non prima: contare un
+            # verbale che il ledger non ha accettato lascerebbe i due registri
+            # a dire numeri diversi sulla stessa giornata.
+            if not self._write(
                 snapshot=snapshot,
                 replica_id=replica_id,
                 asset=asset,
@@ -262,7 +336,9 @@ class DailyRunner:
                 fill=None,
                 malformed_reason=parsed.reason.value if parsed.reason else None,
                 run_id=run_id,
-            )
+            ):
+                return None
+            observe(replica_id, verdict)
             return AssetOutcome(
                 replica_id=replica_id,
                 asset=asset,
@@ -274,7 +350,6 @@ class DailyRunner:
         decision = parsed.record
         assert decision is not None
         verdict = self._officer.review(decision, state)
-        telemetry.observe_decision(decision, verdict)
 
         fill = None
         if verdict.is_executable and verdict.size_fraction_out > 0.0:
@@ -289,10 +364,10 @@ class DailyRunner:
                 assume_taker=self._config.assume_taker,
                 slippage_as_half_spread=self._config.slippage_as_half_spread,
             )
-        if verdict.outcome is not RiskOutcome.REJECTED:
-            state.register(asset, verdict.size_fraction_out)
-
-        self._write(
+        # Stessa regola del ramo malformato: prima la riga nel ledger, poi i
+        # contatori e lo stato di portafoglio. Su una chiave già scritta qui
+        # non si osserva e non si registra nulla.
+        if not self._write(
             snapshot=snapshot,
             replica_id=replica_id,
             asset=asset,
@@ -301,7 +376,11 @@ class DailyRunner:
             fill=fill,
             malformed_reason=None,
             run_id=run_id,
-        )
+        ):
+            return None
+        telemetry.observe_decision(decision, verdict)
+        if verdict.outcome is not RiskOutcome.REJECTED:
+            state.register(asset, verdict.size_fraction_out)
         return AssetOutcome(
             replica_id=replica_id,
             asset=asset,
@@ -552,16 +631,28 @@ class DailyRunner:
         fill: ShadowFill | None,
         malformed_reason: str | None,
         run_id: str,
-    ) -> None:
-        self._ledger.append(
-            key=LedgerKey.of(snapshot.asof_utc, replica_id, asset),
-            verdict=verdict,
-            decision=decision,
-            fill=fill,
-            malformed_reason=malformed_reason,
-            snapshot_id=snapshot.snapshot_id,
-            run_id=run_id,
-        )
+    ) -> bool:
+        """Scrive la riga. `False` se la chiave c'era già.
+
+        `DuplicateEntry` qui non è un fallimento della giornata: è il
+        write-once che ha fatto il suo lavoro. La riga che c'è resta quella
+        buona — la storia non si riscrive (CLAUDE.md §9) — e la passata
+        prosegue sulle chiavi che mancano ancora, invece di morire lasciandole
+        non scritte per sempre.
+        """
+        try:
+            self._ledger.append(
+                key=LedgerKey.of(snapshot.asof_utc, replica_id, asset),
+                verdict=verdict,
+                decision=decision,
+                fill=fill,
+                malformed_reason=malformed_reason,
+                snapshot_id=snapshot.snapshot_id,
+                run_id=run_id,
+            )
+        except DuplicateEntry:
+            return False
+        return True
 
 
 # --------------------------------------------------------------------------

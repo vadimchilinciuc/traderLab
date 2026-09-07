@@ -32,7 +32,7 @@ from ledger.eprocess import (
     evaluate_kill_criterion,
 )
 from ledger.telemetry import BehavioralTelemetry
-from ledger.trader_ledger import DuplicateEntry, TraderLedger
+from ledger.trader_ledger import TraderLedger
 from toolserver.store import SnapshotStore
 from toolserver.toollog import ToolCallLog
 from tests.factories import ASOF, make_snapshot
@@ -196,21 +196,31 @@ def test_le_chiavi_coprono_sette_giorni_distinti_senza_duplicati(soak):
     assert len({giorno for giorno, _, _ in chiavi}) == SOAK_DAYS
 
 
-def test_riesecuzione_di_una_giornata_gia_scritta_e_rifiutata(soak):
-    """Write-once: un secondo giro sullo stesso giorno non aggiorna, rifiuta."""
+def test_riesecuzione_di_una_giornata_gia_scritta_non_scrive_nulla(soak):
+    """Write-once: un secondo giro sullo stesso giorno non aggiorna nulla.
+
+    Fino al 2026-09-07 questa passata moriva su `DuplicateEntry` alla prima
+    chiave. La garanzia sotto esame non era pero' l'eccezione — che resta e
+    resta coperta a livello di ledger (`tests/test_ledger.py`) — ma il fatto
+    che **nessuna riga venga riscritta**: un passo ripetuto riconosce le
+    chiavi gia' presenti e non tocca la storia.
+    """
     ledger = soak["ledger"]
     prima = len(ledger)
+    righe_prima = ledger.read_all()
     giorno_ripetuto = 3
-    with pytest.raises(DuplicateEntry, match="write-once"):
-        _run_day(
-            store=soak["store"],
-            ledger=ledger,
-            tmp_path=soak["tmp_path"],
-            day=giorno_ripetuto,
-            telemetry=BehavioralTelemetry(DEFAULT_REPLICA_IDS),
-            snapshot=soak["snapshots"][giorno_ripetuto],
-        )
-    # Il rifiuto non lascia macerie: nessuna riga nuova, catena ancora integra.
+    result = _run_day(
+        store=soak["store"],
+        ledger=ledger,
+        tmp_path=soak["tmp_path"],
+        day=giorno_ripetuto,
+        telemetry=BehavioralTelemetry(DEFAULT_REPLICA_IDS),
+        snapshot=soak["snapshots"][giorno_ripetuto],
+    )
+    assert result.outcomes == []
+    assert len(result.resumed_keys) == ENTRIES_PER_DAY
+    assert ledger.read_all() == righe_prima
+    # La ripetizione non lascia macerie: nessuna riga nuova, catena integra.
     assert len(ledger) == prima
     assert ledger.verify().ok
 

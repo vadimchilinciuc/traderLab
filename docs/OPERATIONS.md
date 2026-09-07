@@ -509,6 +509,32 @@ oggi, il rito esce con 5 e non tocca nulla. Non è un errore da aggirare.
    la finestra pre-registrata del kill-criterion (`ledger/eprocess.py`) conta
    **osservazioni**, non giorni di calendario.
 
+#### Annotazioni del punto 5 — RUN2
+
+Il punto 5 chiede di annotare, e questa è la sede: append-only, una riga per
+buco, con la causa come l'owner l'ha riportata.
+
+| Giorno (UTC) | Evento nel registro operativo | Causa |
+| --- | --- | --- |
+| **2026-08-30** | `skipped_day` | non annotata al momento; buco isolato |
+| **2026-09-06** | `skipped_day` | macchina spenta |
+| **2026-09-07** | `run_failed`, preceduto da `decisions_retry_wait:1` | il primo tentativo è caduto su `overloaded_error` **dopo** aver scritto le due chiavi di `r1`; la ripetizione dell'intero passo è ripartita da `(2026-09-07, r1, BTC)` ed è morta su `DuplicateEntry` |
+
+**I buchi del 06/09 e del 07/09 sono consecutivi**, e sono di due specie
+diverse: il 06/09 il rito **non è partito** (`skipped_day`), il 07/09 il rito
+**è partito e non ha finito** (`run_failed`). La soglia di allarme del
+`PREREG_LAB_S0_RUN2` §7.2 — «> 4 `skipped_day` totali oppure > 2 consecutivi»
+— **non è superata**: gli `skipped_day` del RUN2 dal 22/08 sono **due**
+(30/08 e 06/09) e non sono consecutivi fra loro. L'allarme non scatta, la
+finestra però ha comunque tre giornate in meno di quante il calendario ne
+conti.
+
+Il 2026-09-07 lascia inoltre una **giornata a decisioni parziali**: nel ledger
+dei verbali ci sono le sole due chiavi di `r1` su sei attese, e nessuna coppia
+giornata-asset valida (l'unità di conto pretende tutte e tre le repliche —
+§3.1 del pre-reg). Le quattro chiavi mancanti **non si recuperano**: vale la
+regola qui sopra, un buco onesto vale più di una riga ricostruita.
+
 ---
 
 ## 7. Cosa questo rito non fa

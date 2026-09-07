@@ -30,12 +30,12 @@ from arena.llm_client import (
     MockLLM,
     _is_retryable,
 )
-from arena.risk_officer import RiskConfig
+from arena.risk_officer import PortfolioState, RiskConfig
 from arena.runner import DailyRunner
 from arena.shadow_fill import compute_shadow_fill
 from arena.verbale import MalformedReason
 from contracts.freeze import SamplingPolicy, ThinkingPolicy
-from ledger.trader_ledger import TraderLedger
+from ledger.trader_ledger import DuplicateEntry, TraderLedger
 from toolserver.store import SnapshotStore
 from toolserver.toollog import ToolCallLog
 from tests.factories import ASOF, make_snapshot
@@ -1395,3 +1395,244 @@ def test_cambiare_il_prompt_cambia_il_freeze_id(tmp_path):
 def test_config_arena_rifiuta_repliche_duplicate():
     with pytest.raises(ValueError, match="duplicati"):
         ArenaConfig(replica_ids=("r1", "r1"))
+
+
+# --------------------------------------------------------------------------
+# Ripetizione di un passo interrotto: le chiavi gia' scritte non si rifanno
+# --------------------------------------------------------------------------
+
+
+class _LedgerCheDuplica(TraderLedger):
+    """Ledger che solleva `DuplicateEntry` su una chiave che `has()` nega.
+
+    Serve a riprodurre la corsa fra il controllo e la scrittura: la chiave non
+    risulta presente quando il runner la cerca, e lo e' quando la scrive.
+    """
+
+    def __init__(self, path, bersaglio):
+        super().__init__(path)
+        self.bersaglio = bersaglio
+        self.tentativi_bersaglio = 0
+
+    def append(self, *, key, **kwargs):
+        if (key.replica_id, key.asset) == self.bersaglio:
+            self.tentativi_bersaglio += 1
+            raise DuplicateEntry(f"{key} e' gia' nel ledger (simulato)")
+        return super().append(key=key, **kwargs)
+
+
+def _factory_che_muore_su(replica_morta):
+    """Client factory che fa fallire una replica come un `overloaded_error`."""
+
+    def factory(replica_id):
+        if replica_id == replica_morta:
+            raise LLMError(
+                "overloaded_error",
+                error_type="overloaded_error",
+                retryable=True,
+                attempts=3,
+            )
+        return MockLLM()
+
+    return factory
+
+
+def _righe_per_replica(ledger, replica_id):
+    return [e for e in ledger.read_all() if e["key"]["replica_id"] == replica_id]
+
+
+def test_la_ripetizione_completa_le_chiavi_mancanti_e_non_tocca_le_scritte(wired):
+    """Il passo muore dopo aver scritto una replica; ripetuto, finisce il resto.
+
+    E' la giornata del 2026-09-07 del RUN2: `r1` scritta, il passo caduto su
+    `r2`, e la ripetizione dell'intero passo morta su `DuplicateEntry` su
+    (giorno, r1, BTC) senza scrivere piu' nulla.
+    """
+    store, snapshot, ledger, tool_log = wired
+    attesi = len(DEFAULT_REPLICA_IDS) * len(snapshot.universe)
+
+    primo = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=_factory_che_muore_su("r2"),
+        context_git_sha="abcdef1",
+    )
+    with pytest.raises(LLMError):
+        primo.run_day(snapshot.snapshot_id, run_id="run-1")
+
+    scritte_prima = [tuple(e["key"].values()) for e in ledger.read_all()]
+    assert len(scritte_prima) == len(snapshot.universe)  # la sola r1
+    r1_prima = _righe_per_replica(ledger, "r1")
+
+    # La ripetizione: stesso snapshot, stesso ledger, client sano.
+    ripetizione = DailyRunner(
+        store=store,
+        ledger=TraderLedger(ledger.path),
+        tool_log=tool_log,
+        client_factory=lambda replica_id: MockLLM(),
+        context_git_sha="abcdef1",
+    )
+    result = ripetizione.run_day(snapshot.snapshot_id, run_id="run-1")
+
+    # Le mancanti sono state fatte, e una sola volta.
+    riletto = TraderLedger(ledger.path)
+    chiavi = [tuple(e["key"].values()) for e in riletto.read_all()]
+    assert len(chiavi) == attesi
+    assert len(set(chiavi)) == attesi
+    assert riletto.verify().ok
+
+    # Le chiavi gia' scritte sono state saltate, non rifatte.
+    assert sorted(result.resumed_keys) == sorted(
+        ("r1", asset) for asset in snapshot.universe
+    )
+    assert result.is_resumed
+    assert len(result.outcomes) == attesi - len(snapshot.universe)
+    assert {o.replica_id for o in result.outcomes} == {"r2", "r3"}
+
+    # Le righe di r1 non sono state toccate: stesse righe, stessi hash.
+    assert _righe_per_replica(riletto, "r1") == r1_prima
+
+
+def test_la_ripetizione_non_dichiara_una_dispersione_di_giornata(wired):
+    """Su una passata ripresa la dispersione non e' definita, non e' zero.
+
+    Le decisioni saltate stanno nel ledger e non in questo risultato: una
+    dispersione sul solo sottoinsieme rieseguito direbbe due repliche dove la
+    giornata ne ha tre (verbale RUN2 A.4).
+    """
+    store, snapshot, ledger, tool_log = wired
+    primo = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=_factory_che_muore_su("r2"),
+        context_git_sha="abcdef1",
+    )
+    with pytest.raises(LLMError):
+        primo.run_day(snapshot.snapshot_id, run_id="run-1")
+
+    result = DailyRunner(
+        store=store,
+        ledger=TraderLedger(ledger.path),
+        tool_log=tool_log,
+        client_factory=lambda replica_id: MockLLM(),
+        context_git_sha="abcdef1",
+    ).run_day(snapshot.snapshot_id, run_id="run-1")
+
+    assert result.dispersion is not None
+    assert result.dispersion.is_defined is False
+    assert result.dispersion.action_disagreement is None
+    assert result.dispersion.confidence_dispersion is None
+
+
+def test_una_giornata_intera_gia_scritta_non_riesegue_nulla(wired):
+    """Ripetere una giornata completa non chiama il modello e non scrive."""
+    store, snapshot, ledger, tool_log = wired
+    _runner(wired).run_day(snapshot.snapshot_id, run_id="run-1")
+    righe_prima = ledger.read_all()
+
+    chiamate = []
+
+    def factory(replica_id):
+        chiamate.append(replica_id)
+        return MockLLM()
+
+    result = DailyRunner(
+        store=store,
+        ledger=TraderLedger(ledger.path),
+        tool_log=tool_log,
+        client_factory=factory,
+        context_git_sha="abcdef1",
+    ).run_day(snapshot.snapshot_id, run_id="run-1")
+
+    assert chiamate == []
+    assert result.outcomes == []
+    assert len(result.resumed_keys) == len(DEFAULT_REPLICA_IDS) * len(
+        snapshot.universe
+    )
+    assert TraderLedger(ledger.path).read_all() == righe_prima
+
+
+def test_un_duplicate_inatteso_non_ferma_le_altre_chiavi(wired):
+    """`DuplicateEntry` su una chiave e' «gia' fatto»: le altre proseguono."""
+    store, snapshot, _, tool_log = wired
+    bersaglio = ("r2", sorted(snapshot.universe)[0])
+    ledger = _LedgerCheDuplica(
+        (store.root.parent / "ledger" / "duplica.jsonl"), bersaglio
+    )
+
+    result = DailyRunner(
+        store=store,
+        ledger=ledger,
+        tool_log=tool_log,
+        client_factory=lambda replica_id: MockLLM(),
+        context_git_sha="abcdef1",
+    ).run_day(snapshot.snapshot_id, run_id="run-1")
+
+    attesi = len(DEFAULT_REPLICA_IDS) * len(snapshot.universe)
+    assert ledger.tentativi_bersaglio == 1
+    assert len(result.outcomes) == attesi - 1
+    assert bersaglio in result.resumed_keys
+    # La riga rifiutata non e' finita nei contatori: ledger e telemetria
+    # dicono lo stesso numero.
+    assert len(ledger.read_all()) == len(result.outcomes)
+    assert ledger.verify().ok
+    metriche = result.telemetry.all_metrics()
+    assert metriche["r2"].decisions_total == len(snapshot.universe) - 1
+    assert metriche["r1"].decisions_total == len(snapshot.universe)
+
+
+def test_lo_stato_di_portafoglio_torna_dalle_chiavi_gia_scritte(wired):
+    """La ripresa rimette l'esposizione gia' registrata nello stato.
+
+    Senza questo il Risk Officer ripartirebbe cieco sul cap lordo della
+    replica-giornata, e una ripetizione potrebbe ammettere piu' esposizione di
+    una passata mai interrotta (CLAUDE.md 2: il guardrail sta nel codice).
+    """
+    store, snapshot, ledger, tool_log = wired
+    assets = sorted(snapshot.universe)
+    assert len(assets) >= 2, "il test ha senso solo con piu' di un asset"
+
+    _runner(wired).run_day(snapshot.snapshot_id, run_id="run-1")
+    atteso = {}
+    for entry in ledger.read_all():
+        if entry["key"]["replica_id"] != "r1":
+            continue
+        v = entry["verdict"]
+        if v["outcome"] != RiskOutcome.REJECTED.value:
+            atteso[entry["key"]["asset"]] = v["size_fraction_out"]
+
+    # Si cancella la sola riga dell'ultimo asset di r1, come farebbe un passo
+    # caduto a meta' replica.
+    righe = ledger.read_all()
+    da_tenere = [
+        r
+        for r in righe
+        if not (r["key"]["replica_id"] == "r1" and r["key"]["asset"] == assets[-1])
+    ]
+    righe_json = [
+        json.dumps(r, ensure_ascii=False, sort_keys=True) for r in da_tenere
+    ]
+    ledger.path.write_text(
+        "".join(riga + chr(10) for riga in righe_json), encoding="utf-8"
+    )
+
+    ripreso = TraderLedger(ledger.path)
+    runner = DailyRunner(
+        store=store,
+        ledger=ripreso,
+        tool_log=tool_log,
+        client_factory=lambda replica_id: MockLLM(),
+        context_git_sha="abcdef1",
+    )
+    stato = PortfolioState(allowed_assets=frozenset(snapshot.universe))
+    rimesse = runner._resume_state(
+        day=ASOF.date().isoformat(), replica_id="r1", state=stato
+    )
+
+    assert rimesse == len(assets) - 1
+    assert stato.gross_exposure == pytest.approx(
+        sum(v for a, v in atteso.items() if a != assets[-1])
+    )
+    assert set(stato.changes_today) == set(assets[:-1])
