@@ -771,3 +771,154 @@ vero e irrilevante: il rifiuto del runner arriva a mezzanotte, quando non c'è
 più tempo per ripararlo, e il controllo del mattino esiste per anticiparlo di
 diciassette ore. **Un guasto che il sistema conosce e non dice è peggio di un
 guasto che non conosce**, perché insegna a fidarsi di una tabella verde.
+
+---
+
+## TL-015 — RUN2 chiuso anticipatamente per decisione dell'owner: verbale di chiusura
+
+- **Data**: 2026-10-03 (bozza); la chiusura di fatto è del 2026-09-13
+- **Stato**: **attiva, firmata il 03/10/2026**.
+- **Decisa da**: l'owner, in chat col consigliere, il 03/10/2026 (le cinque
+  questioni D1-D5 qui sotto). La chiusura stessa è del 13/09, per decisione
+  dell'owner.
+- **Supera**: nulla. **Chiude** la pendenza del verbale di chiusura del RUN2
+  registrata in `zeroPipes/docs/program/CODA.md` §20.2.
+- **Fonte dei fatti**: la ricognizione in sola lettura del 02/10/2026
+  (`REPORT_RICOGNIZIONE_RUN2_20261002.md`, gitignorato; HEAD `4f76603`). Ogni
+  fatto porta la sezione di provenienza, «(ric. §n)», ed è trascritto per esteso
+  perché quel referto non sopravvive a un clone.
+
+**Esito: CHIUSO ANTICIPATAMENTE, nella forma di TL-006.** Non è **INVALIDO**:
+il §7.1 del `docs/PREREG_LAB_S0_RUN2.md` riserva quel termine al caso «oltre
+l'estensione», cioè all'inaffidabilità operativa, e qui il calendario non è
+stato esaurito ma **interrotto**. Non è nemmeno un esito del gate: **nessun
+verdetto** sul gate A.9 viene emesso. È un caso non previsto dal PREREG, e viene
+dichiarato come tale.
+
+**Motivazione.** Il RUN2 è chiuso al 13/09 per decisione dell'owner, per
+ragione economica (CODA §20.2, `f42fe7d`, come citata dalla ric. §8.1), **prima**
+del cap di calendario: 42 giorni dal primo giorno con verbali, il 22/08 (TL-011;
+ric. §8.1).
+
+**Cosa NON è entrato in questa decisione, né in questo verbale.** Nessuna misura
+primaria del RUN2 è stata letta: né dalla ricognizione del 02/10 (ric.
+Dichiarazioni, Esito 1), né dal rito che scrive questa voce. In particolare
+**non sono stati letti, contati né stimati**: `p_accordo`, la dispersione, la
+coerenza dichiarativa, l'astensione, la telemetria, i token e la spesa (elenco
+chiuso del PREREG §6.1). Le coppie giornata-asset valide non sono state contate
+(ric. R1).
+
+### Le cinque decisioni dell'owner (03/10/2026)
+
+- **D1 — Forma della chiusura.** Si chiude nella forma del precedente TL-006:
+  le misure primarie del RUN2 **non vengono lette**; i dati restano
+  **congelati**; **nessun verdetto** sul gate. La clausola sotto-40 del PREREG
+  §3.2 **non si applica**: vale «a fine calendario — cap del §7 o sua
+  estensione», e il calendario è stato interrotto.
+- **D2 — Sonde e suite.** Le sonde a k=30 e la suite **non si eseguono**. Sulla
+  macchina, nel perimetro cercato, non ne esiste alcuna esecuzione (ric. §6).
+- **D3 — Il runner corretto `4f76603`.** Ha girato nelle notti dall'08/09 al
+  13/09 e **non prima**: era in HEAD ed è stato invocato l'08, 09, 10, 11 e
+  13/09; il 12/09 era in HEAD ma il rito si è fermato allo snapshot, prima del
+  runner; dal 22/08 al 07/09 compreso HEAD era `a6568d3` (ric. §5). Le modifiche
+  non committate di quelle notti restano non accertabili (ric. §5). Si
+  **dichiara, senza sanare**. La lezione — il freeze non copriva `arena/` né
+  `scripts/` — va in `zeroPipes/docs/program/CODA.md` §6.13 e non la scrive
+  questa voce.
+- **D4 — Dottrina di CODA §12.8.** È **senza oggetto** per il RUN2: dopo il
+  07/09 nessuna giornata è stata completata in due riprese; dall'08/09 al 13/09
+  un solo `run_id` per giorno, sempre sotto i 10 minuti (ric. §3, §5, §8.4).
+- **D5 — CODA §12.10 e §12.12.** La §12.12 è **confermata**: i `key.day` con
+  chiavi fino al 10/09 compreso sono 18 (ric. §3, §8.5). La §12.10 **va
+  riscritta**: il task del mattino passava il manifest giusto (in ogni passata
+  wrapper la riga `[wrapper] comando:` porta
+  `manifests/trader_v1_run2_freeze_manifest.json`); gli allarmi «manifest del
+  rito inutilizzabile … `trader_v0`» vengono da lanci manuali **senza wrapper**,
+  che caricano il default di `scripts/morning_check.py`, cioè
+  `arena/config.py:34`, `trader_v0` (ric. §7, §8.5). I file `ALLARME_*.txt`
+  **restano** nella radice fino alla firma di questa voce.
+
+### I fatti della ricognizione
+
+| Fatto | Valore | ric. |
+| --- | --- | --- |
+| Finestra del RUN2 | 22/08-13/09, 23 giorni di calendario | §3 |
+| Giorni con almeno una chiave | **20** | §3 |
+| Giorni con sei chiavi | **19** | §3 |
+| Giorni senza chiavi | **3**: 30/08 (`skipped_day`), 06/09 (`skipped_day`), 12/09 (`run_failed` allo snapshot) | §3 |
+| Giornata parziale | 07/09: 2 chiavi su 6, quelle di `r1`; la ripetizione è morta su `DuplicateEntry` e non ha scritto righe | §3, §5 |
+| Chiavi doppie, giorni con più di sei righe, `key.day` fuori finestra | nessuno | §3, §4 |
+| `verify()` del ledger dei verbali | `ok=True`, catena integra | §4 |
+| `verify()` del registro operativo | `ok=True`, catena integra; ultimo evento `2026-09-13 day_completed`, `ts_utc 2026-09-13T00:00:03.910195+00:00` | §4 |
+| `freeze_id` di ogni notte con log | uguale al manifest, `2136b199210dd9f231ba8faef3bd764161585167256640373c4ddc1e23d03f02`; `pin_commit afc40d9500ace54b9cfbaebff440abae075cf4ae`; modello `claude-opus-5` | §4 |
+| Eventi operativi del RUN2 | 19 `day_completed`, 2 `skipped_day`, 2 `run_failed`, 1 `decisions_retry_wait`, 0 `failed_decisions` | Conteggi, §3 |
+| Eventi operativi dopo la chiusura (dal 14/09) | nessuno; nessun `daily-*.log` dopo il 13/09 | §2, §3 |
+| sha256 dei registri al 02/10 (dati congelati) | `data/ledger/season0_run2.jsonl` `61ebae18d8bc687442192613fc6ba1224e2cc3ad0781a60219e642d97363f5c1`; `data/ledger/ops.jsonl` `3dc84976a0a91321570b60e8d14f49f4bf66e223f0b8b0778d682aab72a15673` | Intestazione, P-3 |
+| Sonde a k=30 e suite | nessuna esecuzione, nel perimetro cercato | §6 |
+| Allarmi dopo la chiusura | il controllo mattutino, rimasto abilitato, ha scritto ogni mattina in cui ha girato (19/09, 20/09, 21/09, 01/10, 02/10) un `ALLARME` «stagione attiva e giornata di stanotte assente dal ledger» | §7, §8.5 |
+
+Dei buchi, `docs/OPERATIONS.md` §6, «Annotazioni del punto 5 — RUN2», annota
+il 30/08, il 06/09 e il 07/09; il 12/09 (`run_failed`, «build_snapshot.py ha
+restituito 1», ric. §3) non vi compare. Questa voce lo registra qui e non tocca
+quella tabella. La soglia del PREREG §7.2 («> 4 `skipped_day` totali oppure > 2
+consecutivi») non è superata: due `skipped_day`, non consecutivi.
+
+### La lacuna del PREREG: nessuna clausola per la sospensione volontaria
+
+Il `docs/PREREG_LAB_S0_RUN2.md` prevede la fine del calendario e l'invalidità
+oltre l'estensione, non la sospensione voluta dall'owner. Alla lettera:
+
+- §3.2: «Se a fine calendario — cap del §7 o sua estensione — le coppie valide
+  sono **meno di 40**, il test **si esegue all'n raggiunto**» e «Nessuna riga
+  autorizza a fermare la raccolta prima del cap: **l'obiettivo resta 40
+  coppie**, e la clausola serve a non lasciare la stagione senza esito, non a
+  renderla più facile.»
+- §7: «**Cap di calendario** | **42 giorni** dal primo giorno con verbali»;
+  «**Estensione ammessa** | `min(49 giorni; 2026-10-24)`»; §7.1: «Oltre
+  l'estensione, il RUN2 è **INVALIDO per inaffidabilità operativa** e riparte
+  da zero dopo indagine e fix».
+- §11: «Gate di uscita del RUN2 (tutti in AND)»; «Ciò che il RUN2 non può fare
+  è **non rispondere**.»
+
+La chiusura al 13/09 non cade sotto nessuna di queste righe. La lacuna era già
+dichiarata in CODA §20.2 (ric. §8.1); qui si registra che il RUN2 **non
+risponde** al §11, per decisione dell'owner e non per esito.
+
+### Conseguenze dichiarate
+
+- i gate del §11 **non si valutano**: (i) non è accertato, perché le coppie non
+  si contano; (ii) non si legge; (iii) non esiste, perché la suite non è stata
+  raccolta (D2); (iv) ha i soli fatti di integrità della tabella qui sopra e
+  non viene dichiarato superato; (v) non viene emesso (D1); (vi) è questa voce;
+- le misure primarie del RUN2 **non verranno lette** in questa sede né in forza
+  di questa voce: i dati restano congelati, come artefatto;
+- il record del RUN2 resta valido come **archivio**, non come esito;
+- la modifica al runner `4f76603`, fuori dal freeze, resta dichiarata e non
+  sanata (D3).
+
+### Ratifiche e giudizi dell'owner sulla ricognizione
+
+- **P6 della ricognizione** — «`.claude` esiste con il solo lock: retta nella
+  sostanza». Ratificata per iscritto con questa voce. Il fatto: `.claude/`
+  esiste con il solo `scheduled_tasks.lock` (13/08, escluso da
+  `.git/info/exclude:8`), nessun file di settings, nessun hook di progetto (ric.
+  Premesse P6, D1).
+- **Incontro I1** — il valore di una sola giornata contenuto in CODA §12.7 sui
+  tentativi `overloaded_error` del 07/09, non trascritto dalla ricognizione:
+  l'owner lo giudica un **dato operativo**, non un incontro di misura primaria.
+  Non si trascrive nemmeno qui.
+
+### Stato dei due task
+
+- **«traderLab — rito quotidiano»**: **disabilitato**. Ultima esecuzione
+  13/09/2026 02:00:01 locali (13/09 00:00:01Z), esito 0. La data della
+  disattivazione non è accertabile: la cronologia del Task Scheduler è spenta
+  (ric. §2).
+- **«traderLab — controllo mattutino»**: **disabilitato dall'owner il
+  03/10/2026**, per sua dichiarazione. Al 02/10 era ancora abilitato, con
+  ultima esecuzione 02/10/2026 07:00:01 locali ed esito 1 (ric. §2). Questa
+  voce non ha verificato lo stato nel Task Scheduler.
+
+Nessuno dei due task è cancellato.
+
+**Firma owner: Vadim Chilinciuc data: 03/10/2026**
